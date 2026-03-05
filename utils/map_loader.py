@@ -49,4 +49,4 @@ def load_world(filepath: str) -> World:
 
         grid.append(row)
 
-    return World(grid)
+    return grid
