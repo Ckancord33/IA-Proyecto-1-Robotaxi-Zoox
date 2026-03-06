@@ -2,11 +2,13 @@
 
 Muestra el mundo del problema con colores y simbolos para cada tipo
 de celda, y permite navegar entre mapas con un selector lateral.
+Incluye solver y animación del recorrido.
 """
 
 import glob
 import os
 import sys
+import time
 
 import pygame
 
@@ -19,15 +21,19 @@ from models.world import (
     CELL_FREE, CELL_GOAL, CELL_HIGH, CELL_PASSENGER, CELL_START, CELL_WALL,
     World,
 )
+from models.problem import Problem
 from utils.map_loader import load_world
+from utils.result import Result
+from algorithms.breadth_first_search import BFS
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
-WIN_W     = 980
+WIN_W     = 1200
 WIN_H     = 720
 HEADER_H  = 60
-SIDEBAR_W = 230
+SIDEBAR_W = 250
+LOGPANEL_H = 180
 PAD       = 14
-MAX_CELL  = 70
+MAX_CELL  = 60
 MIN_CELL  = 20
 FPS       = 60
 
@@ -126,15 +132,21 @@ def draw_start(surf, rect):
     """Top-down robot taxi (zona de inicio)."""
     x, y, w, h = rect
     pygame.draw.rect(surf, C_START_BG, rect)
+    _draw_car(surf, rect)
 
+
+def _draw_car(surf, rect, highlight=False):
+    """Dibuja el carro del robotaxi. Puede usarse para animación."""
+    x, y, w, h = rect
     p  = max(4, w // 8)
     bx = x + p
     by = y + p
     bw = w - 2 * p
     bh = h - 2 * p
 
-    # Car body
-    _pill(surf, C_CAR_BODY, (bx, by, bw, bh), r=5)
+    # Car body (con highlight opcional para animación)
+    car_color = (100, 220, 110) if highlight else C_CAR_BODY
+    _pill(surf, car_color, (bx, by, bw, bh), r=5)
 
     # Wheels at four body corners
     wr = max(3, w // 13)
@@ -267,11 +279,50 @@ CELL_DRAWERS = {
 
 # ── Grid renderer ──────────────────────────────────────────────────────────────
 
-def draw_grid(surf, world: World, ox: int, oy: int, csz: int):
+def draw_grid(surf, world: World, ox: int, oy: int, csz: int, 
+              car_pos=None, picked_passengers=None, highlight_cell=None):
+    """
+    Dibuja el grid del mundo.
+    
+    car_pos: (row, col) posición del carro durante animación
+    picked_passengers: set de índices de pasajeros ya recogidos
+    highlight_cell: (row, col) celda a resaltar durante animación
+    """
+    if picked_passengers is None:
+        picked_passengers = set()
+    
     for r in range(world.rows):
         for c in range(world.cols):
-            drawer = CELL_DRAWERS.get(world.get_cell(r, c), draw_free)
-            drawer(surf, (ox + c * csz, oy + r * csz, csz, csz))
+            cell_type = world.get_cell(r, c)
+            
+            # Si es pasajero y ya fue recogido, dibujar como celda libre
+            if cell_type == CELL_PASSENGER:
+                passenger_idx = world.passenger_index(r, c)
+                if passenger_idx in picked_passengers:
+                    cell_type = CELL_FREE
+            
+            drawer = CELL_DRAWERS.get(cell_type, draw_free)
+            cell_rect = (ox + c * csz, oy + r * csz, csz, csz)
+            drawer(surf, cell_rect)
+            
+            # Resaltar celda actual durante animación
+            if highlight_cell and highlight_cell == (r, c):
+                pygame.draw.rect(surf, (255, 255, 100), cell_rect, 3)
+    
+    # Dibujar el carro en su posición actual (si está animando)
+    if car_pos:
+        r, c = car_pos
+        car_rect = (ox + c * csz, oy + r * csz, csz, csz)
+        # Primero dibujar fondo según el tipo de celda
+        cell_type = world.get_cell(r, c)
+        if cell_type == CELL_HIGH:
+            pygame.draw.rect(surf, C_HIGH_BG, car_rect)
+        elif cell_type == CELL_GOAL:
+            pygame.draw.rect(surf, C_GOAL_BG, car_rect)
+        else:
+            pygame.draw.rect(surf, C_ROAD, car_rect)
+        # Luego dibujar el carro sobre la celda
+        _draw_car(surf, car_rect, highlight=True)
 
     gw = world.cols * csz
     gh = world.rows * csz
@@ -318,19 +369,30 @@ class Button:
 class MapViewer:
     def __init__(self, maps_dir: str = "maps"):
         pygame.init()
-        pygame.display.set_caption("Robotaxi Zoox  -  World Viewer")
+        pygame.display.set_caption("Robotaxi Zoox  -  Solver & Animation")
         self.screen = pygame.display.set_mode((WIN_W, WIN_H))
         self.clock  = pygame.time.Clock()
 
         self.font_lg = pygame.font.SysFont("segoeui", 22, bold=True)
         self.font_md = pygame.font.SysFont("segoeui", 15)
         self.font_sm = pygame.font.SysFont("segoeui", 13)
+        self.font_xs = pygame.font.SysFont("consolas", 11)
 
         self.maps_dir = maps_dir
         self._discover_maps()
         self.selected = 0
         self._load(0)
         self._build_buttons()
+        
+        # Estado del solver y animación
+        self.result: Result | None = None
+        self.is_solving = False
+        self.is_animating = False
+        self.animation_step = 0
+        self.animation_path = []
+        self.animation_picked = set()
+        self.animation_delay = 0  # Para simular tráfico alto
+        self.log_messages = []
 
     # ── Map management ─────────────────────────────────────────────────────────
 
@@ -348,33 +410,156 @@ class MapViewer:
     def _load(self, idx: int):
         grid = load_world(self.map_paths[idx])
         self.world = World(grid)
+        self.problem = Problem(self.world)
+        # Resetear estado cuando se cambia de mapa
+        self.result = None
+        self.is_animating = False
+        self.animation_step = 0
+        self.animation_path = []
+        self.animation_picked = set()
+        self.log_messages = []
 
     def _select(self, idx: int):
         self.selected = idx
         self._load(idx)
-        for btn in self.buttons:
+        for btn in self.map_buttons:
             btn.active = (btn.tag == idx)
+    
+    # ── Solver y Animación ─────────────────────────────────────────────────────
+    
+    def _solve(self):
+        """Ejecuta el algoritmo BFS y guarda el resultado."""
+        self.log_messages = ["Calculando solución..."]
+        self.is_solving = True
+        
+        try:
+            bfs = BFS(self.problem)
+            self.result = bfs.solve()
+            
+            if self.result.found():
+                self.log_messages = [
+                    "=== SOLUCIÓN ENCONTRADA ===",
+                    f"Nodos expandidos: {self.result.nodes_expanded}",
+                    f"Profundidad: {self.result.depth}",
+                    f"Costo total: {self.result.cost}",
+                    f"Tiempo: {self.result.time:.4f}s",
+                    f"Acciones: {len(self.result.get_actions())}",
+                    "",
+                    "Presiona 'Animar' para ver el recorrido"
+                ]
+            else:
+                self.log_messages = [
+                    "=== NO SE ENCONTRÓ SOLUCIÓN ===",
+                    f"Nodos expandidos: {self.result.nodes_expanded}",
+                    f"Tiempo: {self.result.time:.4f}s"
+                ]
+        except Exception as e:
+            self.log_messages = [
+                "ERROR al calcular:",
+                str(e)
+            ]
+            self.result = None
+        
+        self.is_solving = False
+    
+    def _start_animation(self):
+        """Inicia la animación del recorrido."""
+        if not self.result or not self.result.found():
+            self.log_messages = ["Primero debes calcular una solución válida"]
+            return
+        
+        self.is_animating = True
+        self.animation_step = 0
+        self.animation_path = self.result.solution
+        self.animation_picked = set()
+        self.animation_delay = 0
+        self.log_messages = [
+            "=== ANIMANDO RECORRIDO ===",
+            "",
+            "El carro está siguiendo el camino...",
+        ]
+    
+    def _update_animation(self):
+        """Actualiza un paso de la animación."""
+        if not self.is_animating or not self.animation_path:
+            return
+        
+        # Control de velocidad (más lento en tráfico alto)
+        if self.animation_delay > 0:
+            self.animation_delay -= 1
+            return
+        
+        if self.animation_step >= len(self.animation_path):
+            self.is_animating = False
+            self.log_messages.append("")
+            self.log_messages.append("¡Animación completada!")
+            self.log_messages.append(f"Llegó a la meta con costo {self.result.cost}")
+            return
+        
+        node = self.animation_path[self.animation_step]
+        state = node.state
+        pos = (state.row, state.col)
+        
+        # Verificar si recogemos un pasajero
+        passenger_idx = self.world.passenger_index(state.row, state.col)
+        if passenger_idx != -1 and passenger_idx not in self.animation_picked:
+            self.animation_picked.add(passenger_idx)
+            self.log_messages.append(f"✓ Pasajero {passenger_idx + 1} recogido!")
+        
+        # Verificar si estamos en tráfico alto (delay mayor)
+        cell_type = self.world.get_cell(state.row, state.col)
+        if cell_type == CELL_HIGH:
+            self.animation_delay = 20  # Frames extra de espera
+            if self.animation_step > 0:  # No mostrar en el primer paso
+                self.log_messages.append(f"⚠ Tráfico alto en ({state.row}, {state.col})")
+        else:
+            self.animation_delay = 5  # Delay normal
+        
+        # Verificar si llegamos a la meta
+        if pos == self.world.goal:
+            self.log_messages.append(f"★ ¡Llegó a la meta!")
+        
+        self.animation_step += 1
 
     # ── Buttons ────────────────────────────────────────────────────────────────
 
     def _build_buttons(self):
+        # Botones de mapas
         bx  = WIN_W - SIDEBAR_W + PAD
         bw  = SIDEBAR_W - PAD * 2
         by0 = HEADER_H + PAD + 30
         bh  = 36
         gap = 8
-        self.buttons: list[Button] = []
+        self.map_buttons: list[Button] = []
         for i, name in enumerate(self.map_names):
             b = Button((bx, by0 + i * (bh + gap), bw, bh),
                        name.capitalize(), tag=i)
             b.active = (i == self.selected)
-            self.buttons.append(b)
+            self.map_buttons.append(b)
+        
+        # Botones de control (Calcular y Animar)
+        n = len(self.map_buttons)
+        controls_y = by0 + n * (bh + gap) + 50
+        
+        self.btn_solve = Button(
+            (bx, controls_y, bw, bh),
+            "Calcular Solución",
+            tag="solve"
+        )
+        
+        self.btn_animate = Button(
+            (bx, controls_y + bh + gap, bw, bh),
+            "Animar",
+            tag="animate"
+        )
+        
+        self.control_buttons = [self.btn_solve, self.btn_animate]
 
     # ── Layout ─────────────────────────────────────────────────────────────────
 
     def _cell_metrics(self):
         avw = WIN_W - SIDEBAR_W - PAD * 2
-        avh = WIN_H - HEADER_H  - PAD * 2
+        avh = WIN_H - HEADER_H - LOGPANEL_H - PAD * 3
         csz = min(avw // self.world.cols, avh // self.world.rows, MAX_CELL)
         csz = max(csz, MIN_CELL)
         ox  = PAD + (avw - self.world.cols * csz) // 2
@@ -410,12 +595,24 @@ class MapViewer:
         # Maps section
         lbl = self.font_md.render("MAPAS", True, C_ACCENT)
         self.screen.blit(lbl, (sx + PAD, HEADER_H + PAD))
-        for btn in self.buttons:
+        for btn in self.map_buttons:
             btn.draw(self.screen, self.font_md)
 
+        # Control buttons section
+        n = len(self.map_buttons)
+        controls_y = HEADER_H + PAD + 30 + n * (36 + 8) + 12
+        pygame.draw.line(self.screen, C_BORDER,
+                         (sx + PAD, controls_y), 
+                         (sx + SIDEBAR_W - PAD, controls_y), 1)
+        
+        lbl_ctrl = self.font_md.render("CONTROLES", True, C_ACCENT)
+        self.screen.blit(lbl_ctrl, (sx + PAD, controls_y + 8))
+        
+        for btn in self.control_buttons:
+            btn.draw(self.screen, self.font_sm)
+
         # Separator
-        n   = len(self.buttons)
-        sep = HEADER_H + PAD + 30 + n * (36 + 8) + 12
+        sep = controls_y + 8 + lbl_ctrl.get_height() + 36 * 2 + 8 * 2 + 12
         pygame.draw.line(self.screen, C_BORDER,
                          (sx + PAD, sep), (sx + SIDEBAR_W - PAD, sep), 1)
 
@@ -442,6 +639,32 @@ class MapViewer:
         hint = self.font_sm.render("<- / -> cambiar mapa", True, C_TEXT_DIM)
         self.screen.blit(hint, hint.get_rect(
             midbottom=(sx + SIDEBAR_W // 2, WIN_H - 12)))
+    
+    def _draw_log_panel(self):
+        """Dibuja el panel de logs en la parte inferior."""
+        ly = WIN_H - LOGPANEL_H
+        lw = WIN_W - SIDEBAR_W
+        
+        # Panel background
+        pygame.draw.rect(self.screen, C_PANEL, (0, ly, lw, LOGPANEL_H))
+        pygame.draw.line(self.screen, C_BORDER, (0, ly), (lw, ly), 2)
+        
+        # Title
+        title = self.font_md.render("LOG / RESULTADO", True, C_ACCENT)
+        self.screen.blit(title, (PAD, ly + PAD))
+        
+        # Log messages
+        msg_y = ly + PAD + title.get_height() + 8
+        line_height = 16
+        max_lines = (LOGPANEL_H - PAD * 2 - title.get_height() - 8) // line_height
+        
+        # Mostrar solo las últimas líneas que caben
+        visible_msgs = self.log_messages[-max_lines:] if len(self.log_messages) > max_lines else self.log_messages
+        
+        for i, msg in enumerate(visible_msgs):
+            msg_surf = self.font_xs.render(msg, True, C_TEXT)
+            self.screen.blit(msg_surf, (PAD + 5, msg_y + i * line_height))
+    
 
     # ── Main loop ──────────────────────────────────────────────────────────────
 
@@ -459,15 +682,45 @@ class MapViewer:
                         self._select((self.selected + 1) % len(self.map_paths))
                     elif event.key in (pygame.K_LEFT, pygame.K_UP):
                         self._select((self.selected - 1) % len(self.map_paths))
-                for btn in self.buttons:
+                
+                # Manejar clicks en botones de mapas
+                for btn in self.map_buttons:
                     if btn.handle_event(event):
                         self._select(btn.tag)
+                
+                # Manejar clicks en botones de control
+                if self.btn_solve.handle_event(event):
+                    if not self.is_solving and not self.is_animating:
+                        self._solve()
+                
+                if self.btn_animate.handle_event(event):
+                    if not self.is_animating and not self.is_solving:
+                        self._start_animation()
 
+            # Actualizar animación si está activa
+            if self.is_animating:
+                self._update_animation()
+
+            # Dibujar todo
             self.screen.fill(C_BG)
+            
             csz, ox, oy = self._cell_metrics()
-            draw_grid(self.screen, self.world, ox, oy, csz)
+            
+            # Determinar posición del carro y pasajeros recogidos
+            car_pos = None
+            if self.is_animating and self.animation_path and self.animation_step > 0:
+                if self.animation_step <= len(self.animation_path):
+                    node = self.animation_path[min(self.animation_step - 1, len(self.animation_path) - 1)]
+                    car_pos = (node.state.row, node.state.col)
+            
+            draw_grid(self.screen, self.world, ox, oy, csz, 
+                     car_pos=car_pos, 
+                     picked_passengers=self.animation_picked)
+            
             self._draw_sidebar()
             self._draw_header()
+            self._draw_log_panel()
+            
             pygame.display.flip()
             self.clock.tick(FPS)
 
