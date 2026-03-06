@@ -25,13 +25,13 @@ from models.problem import Problem
 from utils.map_loader import load_world
 from utils.result import Result
 from algorithms.breadth_first_search import BFS
+# Importar otros algoritmos aquí en el futuro
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
 WIN_W     = 1200
 WIN_H     = 720
 HEADER_H  = 60
-SIDEBAR_W = 250
-LOGPANEL_H = 180
+SIDEBAR_W = 300
 PAD       = 14
 MAX_CELL  = 60
 MIN_CELL  = 20
@@ -84,15 +84,6 @@ C_BTN         = ( 28,  32,  52)
 C_BTN_HOV     = ( 42,  50,  82)
 C_BTN_ACT     = ( 18,  72, 148)
 C_BTN_BORD    = ( 58,  68, 108)
-
-LEGEND_DATA = [
-    (CELL_FREE,      C_ROAD,     "Via libre",    "0"),
-    (CELL_WALL,      C_WALL_BG,  "Muro",         "1"),
-    (CELL_START,     C_START_BG, "Inicio",       "2"),
-    (CELL_HIGH,      C_HIGH_BG,  "Alto trafico", "3"),
-    (CELL_PASSENGER, C_PASS_BG,  "Pasajero",     "4"),
-    (CELL_GOAL,      C_GOAL_BG,  "Destino",      "5"),
-]
 
 
 # ── Drawing helpers ────────────────────────────────────────────────────────────
@@ -284,7 +275,7 @@ def draw_grid(surf, world: World, ox: int, oy: int, csz: int,
     """
     Dibuja el grid del mundo.
     
-    car_pos: (row, col) posición del carro durante animación
+    car_pos: (row_float, col_float) posición del carro con interpolación
     picked_passengers: set de índices de pasajeros ya recogidos
     highlight_cell: (row, col) celda a resaltar durante animación
     """
@@ -311,16 +302,23 @@ def draw_grid(surf, world: World, ox: int, oy: int, csz: int,
     
     # Dibujar el carro en su posición actual (si está animando)
     if car_pos:
-        r, c = car_pos
-        car_rect = (ox + c * csz, oy + r * csz, csz, csz)
-        # Primero dibujar fondo según el tipo de celda
-        cell_type = world.get_cell(r, c)
-        if cell_type == CELL_HIGH:
-            pygame.draw.rect(surf, C_HIGH_BG, car_rect)
-        elif cell_type == CELL_GOAL:
-            pygame.draw.rect(surf, C_GOAL_BG, car_rect)
-        else:
-            pygame.draw.rect(surf, C_ROAD, car_rect)
+        row_float, col_float = car_pos
+        # Posición interpolada en píxeles
+        car_x = ox + col_float * csz
+        car_y = oy + row_float * csz
+        car_rect = (car_x, car_y, csz, csz)
+        
+        # Dibujar fondo de la celda donde está el carro actualmente
+        r_int, c_int = int(row_float), int(col_float)
+        if 0 <= r_int < world.rows and 0 <= c_int < world.cols:
+            cell_type = world.get_cell(r_int, c_int)
+            if cell_type == CELL_HIGH:
+                pygame.draw.rect(surf, C_HIGH_BG, car_rect)
+            elif cell_type == CELL_GOAL:
+                pygame.draw.rect(surf, C_GOAL_BG, car_rect)
+            else:
+                pygame.draw.rect(surf, C_ROAD, car_rect)
+        
         # Luego dibujar el carro sobre la celda
         _draw_car(surf, car_rect, highlight=True)
 
@@ -368,9 +366,23 @@ class Button:
 
 class MapViewer:
     def __init__(self, maps_dir: str = "maps"):
+        global WIN_W, WIN_H
         pygame.init()
         pygame.display.set_caption("Robotaxi Zoox  -  Solver & Animation")
-        self.screen = pygame.display.set_mode((WIN_W, WIN_H))
+        display_info = pygame.display.Info()
+        # Permitir crecer hasta el tamano total de la pantalla (sin fullscreen).
+        self.max_win_w = max(1000, display_info.current_w)
+        self.max_win_h = max(620, display_info.current_h)
+        self.min_win_w = 1000
+        self.min_win_h = 620
+
+        WIN_W = min(WIN_W, self.max_win_w)
+        WIN_H = min(WIN_H, self.max_win_h)
+        WIN_W = max(WIN_W, self.min_win_w)
+        WIN_H = max(WIN_H, self.min_win_h)
+
+        # Ventana redimensionable (sin fullscreen).
+        self.screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
         self.clock  = pygame.time.Clock()
 
         self.font_lg = pygame.font.SysFont("segoeui", 22, bold=True)
@@ -378,13 +390,7 @@ class MapViewer:
         self.font_sm = pygame.font.SysFont("segoeui", 13)
         self.font_xs = pygame.font.SysFont("consolas", 11)
 
-        self.maps_dir = maps_dir
-        self._discover_maps()
-        self.selected = 0
-        self._load(0)
-        self._build_buttons()
-        
-        # Estado del solver y animación
+        # Estado del solver, animación y log tipo terminal
         self.result: Result | None = None
         self.is_solving = False
         self.is_animating = False
@@ -392,7 +398,58 @@ class MapViewer:
         self.animation_path = []
         self.animation_picked = set()
         self.animation_delay = 0  # Para simular tráfico alto
+        
+        # Variables para interpolación suave
+        self.animation_progress = 0.0  # Progreso entre 0.0 y 1.0 de celda a celda
+        self.animation_from_pos = None  # (row, col) origen
+        self.animation_to_pos = None    # (row, col) destino
+        self.animation_speed = 1.0      # Multiplicador de velocidad (0.5, 1.0, 1.5, 2.0)
+        self.speed_options = [0.5, 1.0, 1.5, 2.0]
+        self.speed_index = 1  # Índice actual (default 1.0x)
+        
         self.log_messages = []
+        self.log_scroll_offset = 0
+        self.log_auto_follow = True
+        
+        # Estado de secciones desplegables
+        self.maps_collapsed = False
+        self.algorithms_collapsed = False
+        self.log_collapsed = False
+        self.maps_scroll_offset = 0
+        self.algorithms_scroll_offset = 0
+        
+        # Áreas de scroll para detectar mouse
+        self.maps_scroll_area = None
+        self.algorithms_scroll_area = None
+        self.log_scroll_area = None
+
+        self.maps_dir = maps_dir
+        self._discover_maps()
+        self._discover_algorithms()
+        self.selected = 0
+        self.selected_algorithm = 0
+        self._load(0)
+        self._build_buttons()
+
+        self._append_log("=== UI INICIADA ===", f"Mapa cargado: {self.map_names[self.selected]}")
+        self._append_log(f"Algoritmo: {self.algorithm_names[self.selected_algorithm]}")
+        self._append_log(
+            f"Ventana redimensionable activa: min {self.min_win_w}x{self.min_win_h} | "
+            f"max {self.max_win_w}x{self.max_win_h}"
+        )
+        self._append_log("Sidebar anclado a la derecha activado")
+
+    def _apply_window_size(self, width: int, height: int):
+        """Aplica tamaño con límites seguros y recalcula layout."""
+        global WIN_W, WIN_H
+        new_w = max(self.min_win_w, min(width, self.max_win_w))
+        new_h = max(self.min_win_h, min(height, self.max_win_h))
+        if new_w == WIN_W and new_h == WIN_H:
+            return
+
+        WIN_W, WIN_H = new_w, new_h
+        self.screen = pygame.display.set_mode((WIN_W, WIN_H), pygame.RESIZABLE)
+        self._build_buttons()
 
     # ── Map management ─────────────────────────────────────────────────────────
 
@@ -406,6 +463,19 @@ class MapViewer:
                 ]
                 return
         raise FileNotFoundError(f"No maps found in '{self.maps_dir}'")
+    
+    def _discover_algorithms(self):
+        """Descubre los algoritmos disponibles."""
+        # Lista de algoritmos disponibles (nombre, clase)
+        # En el futuro se pueden agregar más aquí
+        self.algorithms = [
+            ("BFS", BFS),
+            # ("DFS", DFS),
+            # ("UCS", UCS),
+            # ("A*", AStar),
+        ]
+        self.algorithm_names = [name for name, _ in self.algorithms]
+        self.algorithm_classes = [cls for _, cls in self.algorithms]
 
     def _load(self, idx: int):
         grid = load_world(self.map_paths[idx])
@@ -417,27 +487,43 @@ class MapViewer:
         self.animation_step = 0
         self.animation_path = []
         self.animation_picked = set()
-        self.log_messages = []
 
     def _select(self, idx: int):
         self.selected = idx
         self._load(idx)
         for btn in self.map_buttons:
             btn.active = (btn.tag == idx)
+        self._append_log("", f"=== MAPA: {self.map_names[idx]} ===")
+    
+    def _select_algorithm(self, idx: int):
+        """Selecciona un algoritmo."""
+        self.selected_algorithm = idx
+        self._append_log(f"Algoritmo seleccionado: {self.algorithm_names[idx]}")
+
+    def _append_log(self, *lines: str):
+        """Agrega líneas al historial del log (modo terminal)."""
+        for line in lines:
+            self.log_messages.append(str(line))
+
+        # Si el usuario no está revisando historial, mantener vista al final.
+        if self.log_auto_follow:
+            self.log_scroll_offset = len(self.log_messages)
     
     # ── Solver y Animación ─────────────────────────────────────────────────────
     
     def _solve(self):
-        """Ejecuta el algoritmo BFS y guarda el resultado."""
-        self.log_messages = ["Calculando solución..."]
+        """Ejecuta el algoritmo seleccionado y guarda el resultado."""
+        algo_name = self.algorithm_names[self.selected_algorithm]
+        self._append_log("", f"Calculando solución con {algo_name}...")
         self.is_solving = True
         
         try:
-            bfs = BFS(self.problem)
-            self.result = bfs.solve()
+            algo_class = self.algorithm_classes[self.selected_algorithm]
+            algorithm = algo_class(self.problem)
+            self.result = algorithm.solve()
             
             if self.result.found():
-                self.log_messages = [
+                self._append_log(
                     "=== SOLUCIÓN ENCONTRADA ===",
                     f"Nodos expandidos: {self.result.nodes_expanded}",
                     f"Profundidad: {self.result.depth}",
@@ -446,18 +532,18 @@ class MapViewer:
                     f"Acciones: {len(self.result.get_actions())}",
                     "",
                     "Presiona 'Animar' para ver el recorrido"
-                ]
+                )
             else:
-                self.log_messages = [
+                self._append_log(
                     "=== NO SE ENCONTRÓ SOLUCIÓN ===",
                     f"Nodos expandidos: {self.result.nodes_expanded}",
                     f"Tiempo: {self.result.time:.4f}s"
-                ]
+                )
         except Exception as e:
-            self.log_messages = [
+            self._append_log(
                 "ERROR al calcular:",
                 str(e)
-            ]
+            )
             self.result = None
         
         self.is_solving = False
@@ -465,7 +551,7 @@ class MapViewer:
     def _start_animation(self):
         """Inicia la animación del recorrido."""
         if not self.result or not self.result.found():
-            self.log_messages = ["Primero debes calcular una solución válida"]
+            self._append_log("Primero debes calcular una solución válida")
             return
         
         self.is_animating = True
@@ -473,93 +559,137 @@ class MapViewer:
         self.animation_path = self.result.solution
         self.animation_picked = set()
         self.animation_delay = 0
-        self.log_messages = [
+        self.animation_progress = 0.0
+        
+        # Inicializar primera transición si hay al menos 2 nodos
+        if len(self.animation_path) >= 2:
+            state0 = self.animation_path[0].state
+            state1 = self.animation_path[1].state
+            self.animation_from_pos = (state0.row, state0.col)
+            self.animation_to_pos = (state1.row, state1.col)
+        elif len(self.animation_path) == 1:
+            state0 = self.animation_path[0].state
+            self.animation_from_pos = (state0.row, state0.col)
+            self.animation_to_pos = (state0.row, state0.col)
+        
+        self._append_log(
             "=== ANIMANDO RECORRIDO ===",
+            f"Velocidad: {self.animation_speed}x",
             "",
             "El carro está siguiendo el camino...",
-        ]
+        )
     
     def _update_animation(self):
-        """Actualiza un paso de la animación."""
+        """Actualiza un paso de la animación con interpolación suave."""
         if not self.is_animating or not self.animation_path:
             return
         
-        # Control de velocidad (más lento en tráfico alto)
+        # Si hay delay (tráfico alto), esperar
         if self.animation_delay > 0:
             self.animation_delay -= 1
             return
         
-        if self.animation_step >= len(self.animation_path):
-            self.is_animating = False
-            self.log_messages.append("")
-            self.log_messages.append("¡Animación completada!")
-            self.log_messages.append(f"Llegó a la meta con costo {self.result.cost}")
+        # Verificar si ya terminamos
+        if self.animation_step >= len(self.animation_path) - 1:
+            # Asegurar que llegamos a la posición final
+            if self.animation_progress < 1.0:
+                self.animation_progress = min(1.0, self.animation_progress + 0.03 * self.animation_speed)
+            else:
+                self.is_animating = False
+                self.log_messages.append("")
+                self.log_messages.append("¡Animación completada!")
+                self.log_messages.append(f"Llegó a la meta con costo {self.result.cost}")
             return
         
-        node = self.animation_path[self.animation_step]
-        state = node.state
-        pos = (state.row, state.col)
+        # Incrementar progreso de interpolación (más rápido según la velocidad)
+        base_speed = 0.03  # Velocidad base de interpolación
+        self.animation_progress += base_speed * self.animation_speed
         
-        # Verificar si recogemos un pasajero
-        passenger_idx = self.world.passenger_index(state.row, state.col)
-        if passenger_idx != -1 and passenger_idx not in self.animation_picked:
-            self.animation_picked.add(passenger_idx)
-            self.log_messages.append(f"✓ Pasajero {passenger_idx + 1} recogido!")
+        # Si llegamos al destino, avanzar al siguiente segmento
+        if self.animation_progress >= 1.0:
+            self.animation_progress = 0.0
+            self.animation_step += 1
+            
+            if self.animation_step < len(self.animation_path):
+                # Eventos al llegar a una nueva celda
+                node = self.animation_path[self.animation_step]
+                state = node.state
+                pos = (state.row, state.col)
+                
+                # Verificar si recogemos un pasajero
+                passenger_idx = self.world.passenger_index(state.row, state.col)
+                if passenger_idx != -1 and passenger_idx not in self.animation_picked:
+                    self.animation_picked.add(passenger_idx)
+                    self.log_messages.append(f"✓ Pasajero {passenger_idx + 1} recogido!")
+                
+                # Verificar si estamos en tráfico alto (delay mayor)
+                cell_type = self.world.get_cell(state.row, state.col)
+                if cell_type == CELL_HIGH:
+                    # Delay más corto, ajustado por velocidad
+                    self.animation_delay = int(15 / self.animation_speed)
+                    self.log_messages.append(f"⚠ Tráfico alto en ({state.row}, {state.col})")
+                
+                # Verificar si llegamos a la meta
+                if pos == self.world.goal:
+                    self.log_messages.append(f"★ ¡Llegó a la meta!")
+                
+                # Configurar siguiente transición
+                if self.animation_step + 1 < len(self.animation_path):
+                    state_from = self.animation_path[self.animation_step].state
+                    state_to = self.animation_path[self.animation_step + 1].state
+                    self.animation_from_pos = (state_from.row, state_from.col)
+                    self.animation_to_pos = (state_to.row, state_to.col)
+    
+    def _get_interpolated_car_pos(self):
+        """Retorna la posición interpolada del carro para dibujo suave."""
+        if not self.is_animating or not self.animation_from_pos or not self.animation_to_pos:
+            return None
         
-        # Verificar si estamos en tráfico alto (delay mayor)
-        cell_type = self.world.get_cell(state.row, state.col)
-        if cell_type == CELL_HIGH:
-            self.animation_delay = 20  # Frames extra de espera
-            if self.animation_step > 0:  # No mostrar en el primer paso
-                self.log_messages.append(f"⚠ Tráfico alto en ({state.row}, {state.col})")
-        else:
-            self.animation_delay = 5  # Delay normal
+        from_r, from_c = self.animation_from_pos
+        to_r, to_c = self.animation_to_pos
         
-        # Verificar si llegamos a la meta
-        if pos == self.world.goal:
-            self.log_messages.append(f"★ ¡Llegó a la meta!")
+        # Interpolación lineal
+        t = self.animation_progress
+        row_float = from_r + (to_r - from_r) * t
+        col_float = from_c + (to_c - from_c) * t
         
-        self.animation_step += 1
+        return (row_float, col_float)
+    
+    def _cycle_animation_speed(self):
+        """Cambia la velocidad de animación al siguiente valor."""
+        self.speed_index = (self.speed_index + 1) % len(self.speed_options)
+        self.animation_speed = self.speed_options[self.speed_index]
+        self._append_log(f"Velocidad de animación: {self.animation_speed}x")
 
     # ── Buttons ────────────────────────────────────────────────────────────────
 
     def _build_buttons(self):
-        # Botones de mapas
+        # Botones de mapas (más pequeños para el scroll)
         bx  = WIN_W - SIDEBAR_W + PAD
-        bw  = SIDEBAR_W - PAD * 2
-        by0 = HEADER_H + PAD + 30
-        bh  = 36
-        gap = 8
+        bw  = SIDEBAR_W - PAD * 2 - 10  # Espacio para scrollbar visual
+        bh  = 26  # Más pequeños
+        gap = 4
+        
+        # Los botones se crearán dinámicamente en _draw_sidebar según el scroll
         self.map_buttons: list[Button] = []
-        for i, name in enumerate(self.map_names):
-            b = Button((bx, by0 + i * (bh + gap), bw, bh),
-                       name.capitalize(), tag=i)
-            b.active = (i == self.selected)
-            self.map_buttons.append(b)
+        self.algorithm_buttons: list[Button] = []
+        self.map_button_height = bh
+        self.map_button_gap = gap
+        self.map_button_x = bx
+        self.map_button_width = bw
         
-        # Botones de control (Calcular y Animar)
-        n = len(self.map_buttons)
-        controls_y = by0 + n * (bh + gap) + 50
-        
-        self.btn_solve = Button(
-            (bx, controls_y, bw, bh),
-            "Calcular Solución",
-            tag="solve"
-        )
-        
-        self.btn_animate = Button(
-            (bx, controls_y + bh + gap, bw, bh),
-            "Animar",
-            tag="animate"
-        )
-        
-        self.control_buttons = [self.btn_solve, self.btn_animate]
+        # Botones de control (Calcular y Animar) - tamaño normal
+        self.btn_solve = None
+        self.btn_animate = None
+        self.btn_speed = None
+        self.btn_clear_log = None
+        self.control_buttons = []
 
     # ── Layout ─────────────────────────────────────────────────────────────────
 
     def _cell_metrics(self):
         avw = WIN_W - SIDEBAR_W - PAD * 2
-        avh = WIN_H - HEADER_H - LOGPANEL_H - PAD * 3
+        avh = WIN_H - HEADER_H - PAD * 2
         csz = min(avw // self.world.cols, avh // self.world.rows, MAX_CELL)
         csz = max(csz, MIN_CELL)
         ox  = PAD + (avw - self.world.cols * csz) // 2
@@ -569,111 +699,362 @@ class MapViewer:
     # ── Drawing ────────────────────────────────────────────────────────────────
 
     def _draw_header(self):
-        pygame.draw.rect(self.screen, C_PANEL, (0, 0, WIN_W, HEADER_H))
-        pygame.draw.line(self.screen, C_BORDER,
+        surf = self.screen
+        pygame.draw.rect(surf, C_PANEL, (0, 0, WIN_W, HEADER_H))
+        pygame.draw.line(surf, C_BORDER,
                          (0, HEADER_H), (WIN_W, HEADER_H), 1)
 
         title = self.font_lg.render("ROBOTAXI  -  ZOOX", True, C_TEXT)
         sub   = self.font_sm.render("World Viewer", True, C_TEXT_DIM)
         tot_h = title.get_height() + 2 + sub.get_height()
         base  = (HEADER_H - tot_h) // 2
-        self.screen.blit(title, (20, base))
-        self.screen.blit(sub,   (20, base + title.get_height() + 2))
+        surf.blit(title, (20, base))
+        surf.blit(sub,   (20, base + title.get_height() + 2))
 
         info = self.font_sm.render(
             f"{self.world.rows}x{self.world.cols}  |  "
             f"{len(self.world.passengers)} pasajero(s)",
             True, C_TEXT_DIM)
-        self.screen.blit(info, info.get_rect(
+        surf.blit(info, info.get_rect(
             midright=(WIN_W - SIDEBAR_W - PAD, HEADER_H // 2)))
 
+    def _draw_collapsible_header(self, surf, sx, y, title, collapsed, show_clear_button=False):
+        """Dibuja un header desplegable y retorna el rect del área clickeable."""
+        header_h = 28
+        header_rect = pygame.Rect(sx + PAD, y, SIDEBAR_W - PAD * 2, header_h)
+        
+        # Fondo del header
+        pygame.draw.rect(surf, C_BTN, header_rect, border_radius=4)
+        pygame.draw.rect(surf, C_BORDER, header_rect, width=1, border_radius=4)
+        
+        # Icono de expandir/colapsar
+        icon = "▼" if not collapsed else "▶"
+        icon_surf = self.font_sm.render(icon, True, C_ACCENT)
+        surf.blit(icon_surf, (sx + PAD + 6, y + 7))
+        
+        # Título
+        lbl = self.font_md.render(title, True, C_ACCENT)
+        surf.blit(lbl, (sx + PAD + 22, y + 5))
+        
+        # Botón de limpiar (solo para log)
+        clear_btn_rect = None
+        if show_clear_button:
+            btn_w = 50
+            btn_h = 20
+            btn_x = sx + SIDEBAR_W - PAD - btn_w - 2
+            btn_y = y + 4
+            clear_btn_rect = pygame.Rect(btn_x, btn_y, btn_w, btn_h)
+            
+            # Detectar hover
+            mx, my = pygame.mouse.get_pos()
+            is_hovered = clear_btn_rect.collidepoint(mx, my)
+            btn_color = C_BTN_HOV if is_hovered else (35, 38, 50)
+            
+            pygame.draw.rect(surf, btn_color, clear_btn_rect, border_radius=3)
+            pygame.draw.rect(surf, C_BORDER, clear_btn_rect, width=1, border_radius=3)
+            
+            clear_text = self.font_xs.render("Limpiar", True, C_TEXT_DIM)
+            text_rect = clear_text.get_rect(center=clear_btn_rect.center)
+            surf.blit(clear_text, text_rect)
+            
+            self.btn_clear_log = clear_btn_rect
+        
+        return header_rect
+    
     def _draw_sidebar(self):
+        surf = self.screen
         sx = WIN_W - SIDEBAR_W
-        pygame.draw.rect(self.screen, C_PANEL,  (sx, 0, SIDEBAR_W, WIN_H))
-        pygame.draw.line(self.screen, C_BORDER, (sx, 0), (sx, WIN_H), 1)
-
-        # Maps section
-        lbl = self.font_md.render("MAPAS", True, C_ACCENT)
-        self.screen.blit(lbl, (sx + PAD, HEADER_H + PAD))
-        for btn in self.map_buttons:
-            btn.draw(self.screen, self.font_md)
-
-        # Control buttons section
-        n = len(self.map_buttons)
-        controls_y = HEADER_H + PAD + 30 + n * (36 + 8) + 12
-        pygame.draw.line(self.screen, C_BORDER,
-                         (sx + PAD, controls_y), 
-                         (sx + SIDEBAR_W - PAD, controls_y), 1)
+        pygame.draw.rect(surf, C_PANEL,  (sx, 0, SIDEBAR_W, WIN_H))
+        pygame.draw.line(surf, C_BORDER, (sx, 0), (sx, WIN_H), 1)
         
+        current_y = HEADER_H + PAD
+        
+        # ═══ SECCIÓN MAPAS (desplegable con scroll) ═══
+        self.maps_header_rect = self._draw_collapsible_header(
+            surf, sx, current_y, "MAPAS", self.maps_collapsed
+        )
+        current_y += 32
+        
+        if not self.maps_collapsed:
+            # Área disponible para mapas (límite fijo)
+            maps_area_height = 160
+            maps_area_rect = pygame.Rect(sx + PAD, current_y, SIDEBAR_W - PAD * 2, maps_area_height)
+            self.maps_scroll_area = maps_area_rect
+            
+            # Crear superficie de recorte para scroll
+            clip_rect = surf.get_clip()
+            surf.set_clip(maps_area_rect)
+            
+            # Calcular scroll
+            bh = self.map_button_height
+            gap = self.map_button_gap
+            total_maps_height = len(self.map_names) * (bh + gap)
+            max_scroll = max(0, total_maps_height - maps_area_height)
+            self.maps_scroll_offset = max(0, min(self.maps_scroll_offset, max_scroll))
+            
+            # Dibujar botones de mapas
+            self.map_buttons.clear()
+            for i, name in enumerate(self.map_names):
+                by = current_y + i * (bh + gap) - self.maps_scroll_offset
+                # Solo dibujar si está visible
+                if by + bh >= current_y and by < current_y + maps_area_height:
+                    b = Button(
+                        (self.map_button_x, by, self.map_button_width, bh),
+                        name.capitalize(), tag=i
+                    )
+                    b.active = (i == self.selected)
+                    b.draw(surf, self.font_sm)
+                    self.map_buttons.append(b)
+            
+            # Restaurar clip
+            surf.set_clip(clip_rect)
+            
+            # Dibujar scrollbar si es necesario
+            if total_maps_height > maps_area_height:
+                scrollbar_h = max(20, (maps_area_height / total_maps_height) * maps_area_height)
+                scrollbar_y = current_y + (self.maps_scroll_offset / max_scroll) * (maps_area_height - scrollbar_h)
+                pygame.draw.rect(surf, C_BORDER,
+                               (sx + SIDEBAR_W - PAD - 6, scrollbar_y, 4, scrollbar_h),
+                               border_radius=2)
+            
+            current_y += maps_area_height + 8
+        else:
+            # Si está colapsado, limpiar botones y área de scroll
+            self.map_buttons.clear()
+            self.maps_scroll_area = None
+        
+        # Separador
+        pygame.draw.line(surf, C_BORDER,
+                        (sx + PAD, current_y), (sx + SIDEBAR_W - PAD, current_y), 1)
+        current_y += 12
+        
+        # ═══ SECCIÓN ALGORITMOS (desplegable con scroll) ═══
+        self.algorithms_header_rect = self._draw_collapsible_header(
+            surf, sx, current_y, "ALGORITMOS", self.algorithms_collapsed
+        )
+        current_y += 32
+        
+        if not self.algorithms_collapsed:
+            # Área disponible para algoritmos (límite fijo)
+            algorithms_area_height = 120
+            algorithms_area_rect = pygame.Rect(sx + PAD, current_y, SIDEBAR_W - PAD * 2, algorithms_area_height)
+            self.algorithms_scroll_area = algorithms_area_rect
+            
+            # Crear superficie de recorte para scroll
+            clip_rect = surf.get_clip()
+            surf.set_clip(algorithms_area_rect)
+            
+            # Calcular scroll
+            bh = self.map_button_height
+            gap = self.map_button_gap
+            total_algorithms_height = len(self.algorithm_names) * (bh + gap)
+            max_scroll = max(0, total_algorithms_height - algorithms_area_height)
+            self.algorithms_scroll_offset = max(0, min(self.algorithms_scroll_offset, max_scroll))
+            
+            # Dibujar botones de algoritmos
+            self.algorithm_buttons.clear()
+            for i, name in enumerate(self.algorithm_names):
+                by = current_y + i * (bh + gap) - self.algorithms_scroll_offset
+                # Solo dibujar si está visible
+                if by + bh >= current_y and by < current_y + algorithms_area_height:
+                    b = Button(
+                        (self.map_button_x, by, self.map_button_width, bh),
+                        name, tag=i
+                    )
+                    b.active = (i == self.selected_algorithm)
+                    b.draw(surf, self.font_sm)
+                    self.algorithm_buttons.append(b)
+            
+            # Restaurar clip
+            surf.set_clip(clip_rect)
+            
+            # Dibujar scrollbar si es necesario
+            if total_algorithms_height > algorithms_area_height:
+                scrollbar_h = max(20, (algorithms_area_height / total_algorithms_height) * algorithms_area_height)
+                scrollbar_y = current_y + (self.algorithms_scroll_offset / max_scroll) * (algorithms_area_height - scrollbar_h)
+                pygame.draw.rect(surf, C_BORDER,
+                               (sx + SIDEBAR_W - PAD - 6, scrollbar_y, 4, scrollbar_h),
+                               border_radius=2)
+            
+            current_y += algorithms_area_height + 8
+        else:
+            # Si está colapsado, limpiar botones y área de scroll
+            self.algorithm_buttons.clear()
+            self.algorithms_scroll_area = None
+        
+        # Separador
+        pygame.draw.line(surf, C_BORDER,
+                        (sx + PAD, current_y), (sx + SIDEBAR_W - PAD, current_y), 1)
+        current_y += 12
+        
+        # ═══ SECCIÓN CONTROLES (siempre visible) ═══
         lbl_ctrl = self.font_md.render("CONTROLES", True, C_ACCENT)
-        self.screen.blit(lbl_ctrl, (sx + PAD, controls_y + 8))
+        surf.blit(lbl_ctrl, (sx + PAD, current_y))
+        current_y += lbl_ctrl.get_height() + 8
         
-        for btn in self.control_buttons:
-            btn.draw(self.screen, self.font_sm)
-
-        # Separator
-        sep = controls_y + 8 + lbl_ctrl.get_height() + 36 * 2 + 8 * 2 + 12
-        pygame.draw.line(self.screen, C_BORDER,
-                         (sx + PAD, sep), (sx + SIDEBAR_W - PAD, sep), 1)
-
-        # Legend section
-        ly   = sep + 12
-        lbl2 = self.font_md.render("LEYENDA", True, C_ACCENT)
-        self.screen.blit(lbl2, (sx + PAD, ly))
-        ly  += lbl2.get_height() + 8
-
-        sq = 16
-        for (_, color, name, code) in LEGEND_DATA:
-            pygame.draw.rect(self.screen, color,
-                             (sx + PAD, ly, sq, sq), border_radius=3)
-            pygame.draw.rect(self.screen, C_BORDER,
-                             (sx + PAD, ly, sq, sq), width=1, border_radius=3)
-            midy = ly + sq // 2
-            txt  = self.font_sm.render(name, True, C_TEXT)
-            ctxt = self.font_sm.render(f"[{code}]", True, C_TEXT_DIM)
-            self.screen.blit(txt,  txt.get_rect( midleft=(sx + PAD + sq + 5, midy)))
-            self.screen.blit(ctxt, ctxt.get_rect(midright=(sx + SIDEBAR_W - PAD, midy)))
-            ly += sq + 7
-
+        # Botones de control
+        bx = sx + PAD
+        bw = SIDEBAR_W - PAD * 2
+        bh = 32
+        gap = 6
+        
+        self.btn_solve = Button(
+            (bx, current_y, bw, bh),
+            "Calcular Solución",
+            tag="solve"
+        )
+        self.btn_solve.draw(surf, self.font_sm)
+        current_y += bh + gap
+        
+        self.btn_animate = Button(
+            (bx, current_y, bw, bh),
+            "Animar",
+            tag="animate"
+        )
+        self.btn_animate.draw(surf, self.font_sm)
+        current_y += bh + gap
+        
+        # Botón de velocidad
+        speed_label = f"Velocidad: {self.animation_speed}x"
+        self.btn_speed = Button(
+            (bx, current_y, bw, bh),
+            speed_label,
+            tag="speed"
+        )
+        self.btn_speed.draw(surf, self.font_sm)
+        current_y += bh + 12
+        
+        self.control_buttons = [self.btn_solve, self.btn_animate, self.btn_speed]
+        
+        # Separador
+        pygame.draw.line(surf, C_BORDER,
+                        (sx + PAD, current_y), (sx + SIDEBAR_W - PAD, current_y), 1)
+        current_y += 12
+        
+        # ═══ SECCIÓN LOG (desplegable con scroll) ═══
+        self.log_header_rect = self._draw_collapsible_header(
+            surf, sx, current_y, "LOG / RESULTADO", self.log_collapsed, show_clear_button=True
+        )
+        current_y += 32
+        
+        if not self.log_collapsed:
+            # Área disponible para log (hasta el final menos hint)
+            log_area_height = WIN_H - current_y - 30
+            log_area_rect = pygame.Rect(sx + PAD, current_y, SIDEBAR_W - PAD * 2, log_area_height)
+            self.log_scroll_area = log_area_rect
+            
+            # Crear superficie de recorte
+            clip_rect = surf.get_clip()
+            surf.set_clip(log_area_rect)
+            
+            line_height = 13
+            max_visible_lines = int(log_area_height / line_height)
+            
+            # Calcular scroll
+            total_lines = len(self.log_messages)
+            max_start_idx = max(0, total_lines - max_visible_lines)
+            if self.log_auto_follow:
+                self.log_scroll_offset = max_start_idx
+            else:
+                self.log_scroll_offset = max(0, min(self.log_scroll_offset, max_start_idx))
+                if self.log_scroll_offset >= max_start_idx:
+                    self.log_auto_follow = True
+            
+            start_idx = self.log_scroll_offset
+            end_idx = min(start_idx + max_visible_lines, total_lines)
+            
+            # Dibujar mensajes
+            for i, msg in enumerate(self.log_messages[start_idx:end_idx]):
+                msg_surf = self.font_xs.render(msg, True, C_TEXT)
+                surf.blit(msg_surf, (sx + PAD + 3, current_y + i * line_height))
+            
+            # Restaurar clip
+            surf.set_clip(clip_rect)
+            
+            # Dibujar scrollbar si es necesario
+            if total_lines > max_visible_lines:
+                scrollbar_h = max(20, (max_visible_lines / total_lines) * log_area_height)
+                scrollbar_y = current_y + (self.log_scroll_offset / max_start_idx) * (log_area_height - scrollbar_h) if max_start_idx > 0 else current_y
+                pygame.draw.rect(surf, C_BORDER,
+                               (sx + SIDEBAR_W - PAD - 6, scrollbar_y, 4, scrollbar_h),
+                               border_radius=2)
+        else:
+            # Si está colapsado, limpiar área de scroll
+            self.log_scroll_area = None
+        
         # Keyboard hint
         hint = self.font_sm.render("<- / -> cambiar mapa", True, C_TEXT_DIM)
-        self.screen.blit(hint, hint.get_rect(
+        surf.blit(hint, hint.get_rect(
             midbottom=(sx + SIDEBAR_W // 2, WIN_H - 12)))
+
+    def _clear_log(self):
+        """Limpia todos los mensajes del log."""
+        self.log_messages.clear()
+        self.log_scroll_offset = 0
+        self.log_auto_follow = True
+        self._append_log("=== Log limpiado ===")
     
-    def _draw_log_panel(self):
-        """Dibuja el panel de logs en la parte inferior."""
-        ly = WIN_H - LOGPANEL_H
-        lw = WIN_W - SIDEBAR_W
-        
-        # Panel background
-        pygame.draw.rect(self.screen, C_PANEL, (0, ly, lw, LOGPANEL_H))
-        pygame.draw.line(self.screen, C_BORDER, (0, ly), (lw, ly), 2)
-        
-        # Title
-        title = self.font_md.render("LOG / RESULTADO", True, C_ACCENT)
-        self.screen.blit(title, (PAD, ly + PAD))
-        
-        # Log messages
-        msg_y = ly + PAD + title.get_height() + 8
-        line_height = 16
-        max_lines = (LOGPANEL_H - PAD * 2 - title.get_height() - 8) // line_height
-        
-        # Mostrar solo las últimas líneas que caben
-        visible_msgs = self.log_messages[-max_lines:] if len(self.log_messages) > max_lines else self.log_messages
-        
-        for i, msg in enumerate(visible_msgs):
-            msg_surf = self.font_xs.render(msg, True, C_TEXT)
-            self.screen.blit(msg_surf, (PAD + 5, msg_y + i * line_height))
+    def _handle_scroll(self, event):
+        """Maneja el scroll en las áreas del sidebar (mapas, algoritmos y log)."""
+        if event.type == pygame.MOUSEWHEEL:
+            mx, my = pygame.mouse.get_pos()
+            
+            # Scroll en área de mapas
+            if self.maps_scroll_area and self.maps_scroll_area.collidepoint(mx, my):
+                self.maps_scroll_offset -= event.y * 15  # Scroll más rápido
+                return
+            
+            # Scroll en área de algoritmos
+            if self.algorithms_scroll_area and self.algorithms_scroll_area.collidepoint(mx, my):
+                self.algorithms_scroll_offset -= event.y * 15
+                return
+            
+            # Scroll en área de log
+            if self.log_scroll_area and self.log_scroll_area.collidepoint(mx, my):
+                self.log_scroll_offset -= event.y * 3
+                self.log_scroll_offset = max(0, min(self.log_scroll_offset, len(self.log_messages)))
+                if event.y > 0:
+                    self.log_auto_follow = False
+                return
     
+    def _handle_collapsible_click(self, event):
+        """Maneja clicks en los headers desplegables."""
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            # Primero verificar si el click fue en el botón de limpiar log
+            if self.btn_clear_log and self.btn_clear_log.collidepoint(event.pos):
+                return False  # No procesar como click en header
+            
+            if hasattr(self, 'maps_header_rect') and self.maps_header_rect.collidepoint(event.pos):
+                self.maps_collapsed = not self.maps_collapsed
+                return True
+            if hasattr(self, 'algorithms_header_rect') and self.algorithms_header_rect.collidepoint(event.pos):
+                self.algorithms_collapsed = not self.algorithms_collapsed
+                return True
+            if hasattr(self, 'log_header_rect') and self.log_header_rect.collidepoint(event.pos):
+                self.log_collapsed = not self.log_collapsed
+                return True
+        return False
 
     # ── Main loop ──────────────────────────────────────────────────────────────
 
     def run(self):
         while True:
+            # Limpiar botones de secciones colapsadas ANTES de procesar eventos
+            if self.maps_collapsed:
+                self.map_buttons.clear()
+                self.maps_scroll_area = None
+            if self.algorithms_collapsed:
+                self.algorithm_buttons.clear()
+                self.algorithms_scroll_area = None
+            if self.log_collapsed:
+                self.log_scroll_area = None
+            
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
                     pygame.quit()
                     sys.exit()
+                if event.type == pygame.VIDEORESIZE:
+                    self._apply_window_size(event.w, event.h)
                 if event.type == pygame.KEYDOWN:
                     if event.key == pygame.K_ESCAPE:
                         pygame.quit()
@@ -683,19 +1064,42 @@ class MapViewer:
                     elif event.key in (pygame.K_LEFT, pygame.K_UP):
                         self._select((self.selected - 1) % len(self.map_paths))
                 
-                # Manejar clicks en botones de mapas
-                for btn in self.map_buttons:
-                    if btn.handle_event(event):
-                        self._select(btn.tag)
+                # Manejar click en botón de limpiar log (ANTES de headers para evitar conflicto)
+                if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                    if self.btn_clear_log and self.btn_clear_log.collidepoint(event.pos):
+                        self._clear_log()
+                        continue  # No procesar más este evento
+                
+                # Manejar clicks en headers desplegables
+                if self._handle_collapsible_click(event):
+                    continue
+                
+                # Manejar clicks en botones de mapas (solo si no está colapsado)
+                if not self.maps_collapsed:
+                    for btn in self.map_buttons:
+                        if btn.handle_event(event):
+                            self._select(btn.tag)
+                
+                # Manejar clicks en botones de algoritmos (solo si no está colapsado)
+                if not self.algorithms_collapsed:
+                    for btn in self.algorithm_buttons:
+                        if btn.handle_event(event):
+                            self._select_algorithm(btn.tag)
                 
                 # Manejar clicks en botones de control
-                if self.btn_solve.handle_event(event):
+                if self.btn_solve and self.btn_solve.handle_event(event):
                     if not self.is_solving and not self.is_animating:
                         self._solve()
                 
-                if self.btn_animate.handle_event(event):
+                if self.btn_animate and self.btn_animate.handle_event(event):
                     if not self.is_animating and not self.is_solving:
                         self._start_animation()
+                
+                if self.btn_speed and self.btn_speed.handle_event(event):
+                    self._cycle_animation_speed()
+                
+                # Manejar scroll en sidebar
+                self._handle_scroll(event)
 
             # Actualizar animación si está activa
             if self.is_animating:
@@ -706,20 +1110,15 @@ class MapViewer:
             
             csz, ox, oy = self._cell_metrics()
             
-            # Determinar posición del carro y pasajeros recogidos
-            car_pos = None
-            if self.is_animating and self.animation_path and self.animation_step > 0:
-                if self.animation_step <= len(self.animation_path):
-                    node = self.animation_path[min(self.animation_step - 1, len(self.animation_path) - 1)]
-                    car_pos = (node.state.row, node.state.col)
+            # Obtener posición interpolada del carro
+            car_pos = self._get_interpolated_car_pos()
             
-            draw_grid(self.screen, self.world, ox, oy, csz, 
+            draw_grid(self.screen, self.world, ox, oy, csz,
                      car_pos=car_pos, 
                      picked_passengers=self.animation_picked)
             
             self._draw_sidebar()
             self._draw_header()
-            self._draw_log_panel()
             
             pygame.display.flip()
             self.clock.tick(FPS)
