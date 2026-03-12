@@ -19,11 +19,22 @@ from utils.result import Result
 
 class BFS(Algorithm):
 
-  def solve(self) -> Result:
+  def solve(self, config=1) -> Result:
+    """
+    Encuentra la solucion al problema por amplitud.
+
+      - con config=1 el algoritmo usa una tabla hash donde almacena
+        todos los estados visitados, asegurando que si cualquier rama
+        ya visito un estado, otra no la repita.
+
+      - con config != 1 el algoritmo solo revisa que el estado no se haya
+        dado ya en su rama actual, recorriendola con is_in_branch.
+    """
     start_time = time.time()
     nodes_expanded = 0
 
-    visited = set()
+    if(config == 1):
+      visited = set()
     queue = deque()
 
     root = self._make_root()
@@ -38,11 +49,17 @@ class BFS(Algorithm):
           cost=node.cost,
           time=time.time() - start_time
         )
-      visited.add(node.state)
+      if(config == 1):
+        visited.add(node.state)
       
       nodes_expanded += 1
       for child in self._expand(node):
-        if child.state in visited:
+        cond = False
+        if(config == 1):
+          cond = child.state in visited
+        else:
+          cond = self.problem.is_in_branch(child)
+        if cond:
           continue
         queue.append(child)
     

@@ -101,3 +101,12 @@ class Problem:
         new_row = state.row + dr
         new_col = state.col + dc
         return self.world.get_cost(new_row, new_col)
+    
+    def is_in_branch(self, node: Node) -> bool:
+        leaf = node
+        while node.parent:
+            parent = node.parent
+            if parent.state == leaf.state:
+                return True
+            node = parent
+        return False
