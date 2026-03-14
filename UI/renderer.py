@@ -25,6 +25,7 @@ from models.problem import Problem
 from utils.map_loader import load_world
 from utils.result import Result
 from algorithms.breadth_first_search import BFS
+from algorithms.depth_first_search import DFS
 # Importar otros algoritmos aquí en el futuro
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
@@ -470,7 +471,7 @@ class MapViewer:
         # En el futuro se pueden agregar más aquí
         self.algorithms = [
             ("BFS", BFS),
-            # ("DFS", DFS),
+            ("DFS", DFS),
             # ("UCS", UCS),
             # ("A*", AStar),
         ]
