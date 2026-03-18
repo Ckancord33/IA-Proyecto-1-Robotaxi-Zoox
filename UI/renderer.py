@@ -26,6 +26,7 @@ from utils.map_loader import load_world
 from utils.result import Result
 from algorithms.breadth_first_search import BFS
 from algorithms.depth_first_search import DFS
+from algorithms.cost_search import CostSearch
 # Importar otros algoritmos aquí en el futuro
 
 # ── Layout ─────────────────────────────────────────────────────────────────────
@@ -472,7 +473,7 @@ class MapViewer:
         self.algorithms = [
             ("BFS", BFS),
             ("DFS", DFS),
-            # ("UCS", UCS),
+            ("Cost Search", CostSearch),
             # ("A*", AStar),
         ]
         self.algorithm_names = [name for name, _ in self.algorithms]
