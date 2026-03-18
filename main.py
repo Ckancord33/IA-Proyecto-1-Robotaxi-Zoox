@@ -1,6 +1,7 @@
 from models.world import World
 from models.problem import Problem
 from utils.map_loader import load_world
+from UI.renderer import launch
 from algorithms.breadth_first_search import BFS
 from algorithms.depth_first_search import DFS
 from algorithms.cost_search import CostSearch

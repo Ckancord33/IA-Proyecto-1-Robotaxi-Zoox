@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Robotaxi Zoox 3D</title>
+    <link rel="stylesheet" href="style.css" />
+    <script type="text/javascript" src="/eel.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/controls/OrbitControls.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/GLTFLoader.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/examples/js/loaders/DRACOLoader.js"></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="control-panel">
+        <h1>Robotaxi Zoox</h1>
+        <p class="subtitle">Visualizador 3D de busqueda IA</p>
+
+        <label for="mapSelect">Mapa</label>
+        <select id="mapSelect"></select>
+
+        <label for="algorithmSelect">Algoritmo</label>
+        <select id="algorithmSelect"></select>
+
+        <div class="buttons">
+          <button id="loadBtn" class="ghost">Cargar Mapa</button>
+          <button id="solveBtn" class="accent">Calcular Solucion</button>
+          <button id="animateBtn" class="warn">Animar Ruta</button>
+        </div>
+
+        <div class="speed-box">
+          <label for="speedRange">Velocidad Animacion</label>
+          <input id="speedRange" type="range" min="0.5" max="4" value="1.6" step="0.1" />
+          <span id="speedValue">1.6x</span>
+        </div>
+
+        <section class="metrics">
+          <h2>Resultados</h2>
+          <div id="metricsContent">Sin ejecutar.</div>
+        </section>
+
+        <section class="logs">
+          <div class="logs-title-row">
+            <h2>Log</h2>
+            <button id="clearLogBtn" class="mini">Limpiar</button>
+          </div>
+          <pre id="logOutput"></pre>
+        </section>
+      </aside>
+
+      <main class="scene-panel">
+        <div id="sceneCanvas"></div>
+      </main>
+    </div>
+
+    <script src="app.js"></script>
+  </body>
+</html>
