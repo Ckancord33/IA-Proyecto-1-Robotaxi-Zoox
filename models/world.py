@@ -86,6 +86,17 @@ class World:
             if p == pos:
                 return i
         return -1
+    
+    def passenger_position(self, idx: int):
+        return self.passengers[idx]
+    
+    def manhatan_passenger(self, row: int, col:int, passenger_index: int):
+        passenger_row, passenger_col = self.passengers[passenger_index]
+        return abs(passenger_row - row) + abs(passenger_col - col)
+    
+    def manhatan_goal(self, row: int, col:int):
+        goal_row, goal_col = self.goal
+        return abs(goal_row - row) + abs(goal_col - col)
 
     # ------------------------------------------------------------------
     # Debug

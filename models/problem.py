@@ -110,3 +110,25 @@ class Problem:
                 return True
             node = parent
         return False
+    
+      
+    def heuristic(self, state: State):
+        row = state.row
+        col = state.col
+        manhatan = self.world.manhatan_passenger
+        psg_position = self.world.passenger_position
+        missing_psgs = [idx for idx, x in enumerate(state.picked_up) if not x]
+
+        acc = 0
+        nearest_value = 0
+        nearest_psgr = 0
+        while missing_psgs:
+            nearest_value = 1000000
+            for passenger in missing_psgs:
+                if (manhatan(row, col, passenger) < nearest_value):
+                    nearest_value = manhatan(row, col, passenger)
+                    nearest_psgr = passenger
+            acc += nearest_value
+            row, col = psg_position(nearest_psgr)
+            missing_psgs = [x for x in missing_psgs if x != nearest_psgr]
+        return acc
