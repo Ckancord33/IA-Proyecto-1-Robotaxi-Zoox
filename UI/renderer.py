@@ -25,6 +25,8 @@ if _BASE not in sys.path:
 
 from algorithms.breadth_first_search import BFS
 from algorithms.depth_first_search import DFS
+from algorithms.cost_search import CostSearch
+from algorithms.greedy_search import GreedySearch
 from models.problem import Problem
 from models.world import World
 from utils.map_loader import load_world
@@ -34,6 +36,8 @@ _MAP_PATHS: dict[str, str] = {}
 _ALGORITHMS = {
     "BFS": BFS,
     "DFS": DFS,
+    "Cost Search" : CostSearch,
+    "Greedy Search": GreedySearch,
 }
 
 

@@ -103,6 +103,10 @@ class Problem:
         return self.world.get_cost(new_row, new_col)
     
     def is_in_branch(self, node: Node) -> bool:
+        """
+        Confirma que un estado no se haya presentado ya en la
+        rama de un nodo.
+        """
         leaf = node
         while node.parent:
             parent = node.parent
@@ -113,22 +117,27 @@ class Problem:
     
       
     def heuristic(self, state: State):
-        row = state.row
-        col = state.col
-        manhatan = self.world.manhatan_passenger
+        """
+        Suma distancias Manhattan visitando
+        siempre el pasajero más cercano y finalmente al goal.
+        """
+        row, col = state.row, state.col
+        manhatan_passenger = self.world.manhatan_passenger
+        manhatan_goal = self.world.manhatan_goal
         psg_position = self.world.passenger_position
-        missing_psgs = [idx for idx, x in enumerate(state.picked_up) if not x]
 
+        remaining = [i for i, picked in enumerate(state.picked_up) if not picked]
         acc = 0
-        nearest_value = 0
-        nearest_psgr = 0
-        while missing_psgs:
-            nearest_value = 1000000
-            for passenger in missing_psgs:
-                if (manhatan(row, col, passenger) < nearest_value):
-                    nearest_value = manhatan(row, col, passenger)
-                    nearest_psgr = passenger
-            acc += nearest_value
-            row, col = psg_position(nearest_psgr)
-            missing_psgs = [x for x in missing_psgs if x != nearest_psgr]
+
+        while remaining:
+            # seleccionar el índice del pasajero más cercano entre `remaining`.
+            # `min(iterable, key=...)` evalúa la función `key` para cada elemento
+            # y devuelve el elemento cuyo `key` sea mínimo (aquí, la menor distancia).
+            nearest = min(remaining, key=lambda idx: manhatan_passenger(row, col, idx))
+            dist = manhatan_passenger(row, col, nearest)
+            acc += dist
+            row, col = psg_position(nearest)
+            remaining.remove(nearest)
+
+        acc += manhatan_goal(row, col)
         return acc

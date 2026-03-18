@@ -17,6 +17,8 @@ class DFS(Algorithm):
     start_time = time.time()
     nodes_expanded = 0
 
+    if(config == 1):
+      visited = set()
 
     stack = []
 
@@ -32,10 +34,17 @@ class DFS(Algorithm):
           cost=node.cost,
           time=time.time() - start_time
         )
-      
+      if(config == 1):
+        visited.add(node.state)
+
       nodes_expanded += 1
       for child in self._expand(node):
-        if self.problem.is_in_branch(child):
+        cond = False
+        if(config == 1):
+          cond = child.state in visited
+        else:
+          cond = self.problem.is_in_branch(child)
+        if cond:
           continue
         stack.append(child)
     
