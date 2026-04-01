@@ -27,6 +27,7 @@ from algorithms.breadth_first_search import BFS
 from algorithms.depth_first_search import DFS
 from algorithms.cost_search import CostSearch
 from algorithms.greedy_search import GreedySearch
+from algorithms.a_star import aStarSearch
 from models.problem import Problem
 from models.world import World
 from utils.map_loader import load_world
@@ -38,6 +39,7 @@ _ALGORITHMS = {
     "DFS": DFS,
     "Cost Search" : CostSearch,
     "Greedy Search": GreedySearch,
+    "A* Search": aStarSearch,
 }
 
 

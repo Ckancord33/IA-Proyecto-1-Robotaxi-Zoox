@@ -6,6 +6,7 @@ from algorithms.breadth_first_search import BFS
 from algorithms.depth_first_search import DFS
 from algorithms.cost_search import CostSearch
 from algorithms.greedy_search import GreedySearch
+from algorithms.a_star import aStarSearch
 
 def main():
   """
@@ -36,6 +37,11 @@ def main():
   gs = GreedySearch(problem)
   result_gs = gs.solve()
   print(result_gs.__repr__())
+
+  print("\n---------------A* search-------------------------")
+  a_star = aStarSearch(problem)
+  result_a_star = a_star.solve()
+  print(result_a_star.__repr__())
   
 
   
