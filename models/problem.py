@@ -115,8 +115,7 @@ class Problem:
             node = parent
         return False
     
-      
-    def heuristic(self, state: State):
+    def not_accesible_heuristic(self, state: State):
         """
         Suma distancias Manhattan visitando
         siempre el pasajero más cercano y finalmente al goal.
@@ -141,3 +140,26 @@ class Problem:
 
         acc += manhatan_goal(row, col)
         return acc
+    
+      
+    def heuristic(self, state: State):
+        """
+        Busca entre los pasajeros no recogidos el valor tal que la suma de la distancia del taxi
+        al pasajero mas la distancia del pasajero a la meta sea maxima.
+        """
+        row, col = state.row, state.col
+        manhatan_passenger = self.world.manhatan_passenger
+        manhatan_goal = self.world.manhatan_goal
+        psg_position = self.world.passenger_position
+
+        remaining = [i for i, picked in enumerate(state.picked_up) if not picked]
+
+        if(not remaining):
+            return manhatan_goal(row, col)
+        
+        farest = 0
+        for i in remaining:
+            row_psg, col_psg = psg_position(i)
+            farest = max(farest, manhatan_passenger(row, col, i) + manhatan_goal(row_psg, col_psg))
+
+        return farest
