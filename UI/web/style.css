@@ -22,6 +22,7 @@ body {
   margin: 0;
   width: 100%;
   height: 100%;
+  overflow: hidden;
   background: radial-gradient(circle at 20% 10%, #1f3448 0%, var(--bg-0) 55%),
     linear-gradient(140deg, #0b1117 0%, #162331 70%, #102230 100%);
   color: var(--text);
@@ -30,11 +31,12 @@ body {
 
 .app-shell {
   width: 100%;
-  height: 100%;
+  height: 100vh;
   display: grid;
   grid-template-columns: minmax(280px, 350px) 1fr;
   gap: 14px;
   padding: 14px;
+  overflow: hidden;
 }
 
 .control-panel {
@@ -46,6 +48,7 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-height: 0;
 }
 
 h1 {
@@ -152,9 +155,10 @@ button.mini {
 
 .logs {
   flex: 1;
-  min-height: 130px;
+  min-height: 0;
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 .logs-title-row {
@@ -174,6 +178,25 @@ button.mini {
   padding: 8px;
   overflow: auto;
   flex: 1;
+  min-height: 0;
+}
+
+#logOutput::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+#logOutput::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+#logOutput::-webkit-scrollbar-thumb {
+  background: #4f657a;
+  border-radius: 999px;
+}
+
+#logOutput::-webkit-scrollbar-thumb:hover {
+  background: #7d9ab6;
 }
 
 .scene-panel {
@@ -182,6 +205,91 @@ button.mini {
   overflow: hidden;
   background: linear-gradient(170deg, #101a26, #091117);
   position: relative;
+}
+
+.scene-loading {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: rgba(6, 12, 18, 0.55);
+  backdrop-filter: blur(2px);
+  z-index: 20;
+  color: #d9ecfb;
+  font-size: 0.88rem;
+  pointer-events: none;
+}
+
+.scene-loading[hidden] {
+  display: none !important;
+}
+
+.loader-dot {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: #4af6be;
+  box-shadow: 0 0 14px #4af6be, 0 0 30px rgba(74, 246, 190, 0.6);
+  animation: pulse-loader 900ms ease-in-out infinite;
+}
+
+@keyframes pulse-loader {
+  0%,
+  100% {
+    transform: scale(0.7);
+    opacity: 0.45;
+  }
+  50% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.floating-controls {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 8px;
+  z-index: 25;
+}
+
+.fab {
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  display: grid;
+  place-items: center;
+  font-size: 1.1rem;
+  border: 1px solid rgba(185, 214, 239, 0.35);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+  padding: 0;
+}
+
+.fab.play {
+  background: linear-gradient(145deg, #13ca81, #1fdd93);
+  color: #082014;
+}
+
+.fab.play:disabled {
+  background: #4b5562;
+  color: #aab7c6;
+  border-color: #5e6d7e;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.fab.reset {
+  background: linear-gradient(145deg, #2a3948, #3f5062);
+  color: #e8f2fd;
+}
+
+.fab:disabled:hover {
+  transform: none;
+  border-color: #5e6d7e;
 }
 
 #sceneCanvas {

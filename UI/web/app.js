@@ -26,6 +26,9 @@ const state = {
   world: null,
   result: null,
   taxiUsesModel: false,
+  currentMapSignature: null,
+  mapSyncInFlight: false,
+  mapRefreshTimer: null,
   animation: {
     playing: false,
     pathIndex: 0,
@@ -37,15 +40,17 @@ const state = {
 const dom = {
   mapSelect: document.getElementById("mapSelect"),
   algorithmSelect: document.getElementById("algorithmSelect"),
-  loadBtn: document.getElementById("loadBtn"),
   solveBtn: document.getElementById("solveBtn"),
-  animateBtn: document.getElementById("animateBtn"),
+  playFloatingBtn: document.getElementById("playFloatingBtn"),
+  resetFloatingBtn: document.getElementById("resetFloatingBtn"),
   speedRange: document.getElementById("speedRange"),
   speedValue: document.getElementById("speedValue"),
   metricsContent: document.getElementById("metricsContent"),
   logOutput: document.getElementById("logOutput"),
   clearLogBtn: document.getElementById("clearLogBtn"),
   sceneCanvas: document.getElementById("sceneCanvas"),
+  sceneLoading: document.getElementById("sceneLoading"),
+  sceneLoadingText: document.getElementById("sceneLoadingText"),
 };
 
 window.addEventListener("error", (event) => {
@@ -281,6 +286,45 @@ function appendLog(message) {
 
 function clearLog() {
   dom.logOutput.textContent = "";
+}
+
+function setSceneLoading(isLoading, text = "Cargando mapa...") {
+  if (!dom.sceneLoading) {
+    return;
+  }
+  dom.sceneLoading.hidden = !isLoading;
+  if (dom.sceneLoadingText) {
+    dom.sceneLoadingText.textContent = text;
+  }
+}
+
+function hasAnimatableSolution() {
+  return Boolean(state.result && state.result.found && state.result.path && state.result.path.length > 0);
+}
+
+function updateFloatingControls() {
+  const hasSolution = hasAnimatableSolution();
+  dom.playFloatingBtn.disabled = !hasSolution;
+  dom.playFloatingBtn.title = hasSolution
+    ? "Reproducir animacion"
+    : "Primero calcula la solucion.";
+
+  dom.resetFloatingBtn.disabled = !hasSolution;
+  dom.resetFloatingBtn.title = hasSolution
+    ? "Reiniciar animacion"
+    : "No hay animacion para reiniciar.";
+}
+
+function arraysEqual(a, b) {
+  if (a.length !== b.length) {
+    return false;
+  }
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i] !== b[i]) {
+      return false;
+    }
+  }
+  return true;
 }
 
 async function bridgeCall(name, ...args) {
@@ -558,7 +602,8 @@ function createTaxi(position) {
   void attachTaxiModel(root, fallbackMesh);
 }
 
-function renderWorld(world) {
+function renderWorld(world, options = {}) {
+  const { preserveCamera = false } = options;
   resetBoard();
   state.world = world;
 
@@ -630,20 +675,22 @@ function renderWorld(world) {
   }
 
   createTaxi(world.start);
-  if (controls && !useManualOrbit) {
-    controls.target.set(centerX, 0, centerZ);
-    controls.update();
-  } else {
-    syncManualOrbitFromCamera(new THREE.Vector3(centerX, 0, centerZ));
-    applyManualOrbitCamera();
-  }
-  camera.position.set(cols * 1.45, rows * 2.0, rows * 1.55);
-  camera.lookAt(centerX, 0, centerZ);
+  if (!preserveCamera) {
+    // Vista inicial alineada con el TXT (sin giro diagonal):
+    // columnas -> izquierda/derecha, filas -> arriba/abajo, con plano picado.
+    camera.position.set(centerX, Math.max(rows, cols) * 2.35, centerZ + rows * 0.95);
+    camera.lookAt(centerX, 0, centerZ);
 
-  if (controls && !useManualOrbit) {
+    if (controls && !useManualOrbit) {
+      controls.target.set(centerX, 0, centerZ);
+      controls.update();
+    } else {
+      syncManualOrbitFromCamera(new THREE.Vector3(centerX, 0, centerZ));
+      applyManualOrbitCamera();
+    }
+  } else if (controls && !useManualOrbit) {
     controls.update();
   } else {
-    syncManualOrbitFromCamera(new THREE.Vector3(centerX, 0, centerZ));
     applyManualOrbitCamera();
   }
 
@@ -689,17 +736,31 @@ function applyAnimationPose() {
   hidePickedPassengers(from.pickedUp);
 }
 
-async function loadSelectedMap() {
+async function loadSelectedMap(options = {}) {
+  const { skipMetrics = false } = options;
   const mapName = dom.mapSelect.value;
-  const response = await bridgeCall("load_map", mapName);
-  if (!response.ok) {
-    appendLog(`Error cargando mapa: ${response.error}`);
-    return;
-  }
+  setSceneLoading(true, `Cargando ${mapName}...`);
+  try {
+    const response = await bridgeCall("load_map", mapName);
+    if (!response.ok) {
+      appendLog(`Error cargando mapa: ${response.error}`);
+      return;
+    }
 
-  renderWorld(response.payload.world);
-  state.result = null;
-  setMetrics("Mapa listo. Ejecuta 'Calcular Solucion'.");
+    renderWorld(response.payload.world);
+    state.currentMapSignature = response.payload.world.sourceSignature || null;
+    state.result = null;
+    state.animation.playing = false;
+    state.animation.pathIndex = 0;
+    state.animation.progress = 0;
+    updateFloatingControls();
+
+    if (!skipMetrics) {
+      setMetrics("Mapa listo. Ejecuta 'Calcular Solucion'.");
+    }
+  } finally {
+    setSceneLoading(false);
+  }
 }
 
 function resultToMetrics(result, algorithmName) {
@@ -732,13 +793,15 @@ async function solveCurrentMap() {
 
   if (!response.ok) {
     appendLog(`Error en solver: ${response.error}`);
+    updateFloatingControls();
     return;
   }
 
   state.world = response.payload.world;
+  state.currentMapSignature = response.payload.world.sourceSignature || null;
   state.result = response.payload.result;
 
-  renderWorld(state.world);
+  renderWorld(state.world, { preserveCamera: true });
   createRouteLine(state.result.path);
 
   setMetrics(resultToMetrics(state.result, response.payload.algorithm));
@@ -748,11 +811,17 @@ async function solveCurrentMap() {
   } else {
     appendLog("No se encontro solucion.");
   }
+
+  state.animation.playing = false;
+  state.animation.pathIndex = 0;
+  state.animation.progress = 0;
+  updateFloatingControls();
 }
 
 function startAnimation() {
   if (!state.result || !state.result.found || !state.result.path.length) {
     appendLog("No hay solucion para animar.");
+    updateFloatingControls();
     return;
   }
 
@@ -766,6 +835,28 @@ function startAnimation() {
   state.animation.pathIndex = 0;
   state.animation.progress = 0;
   appendLog("Animacion iniciada.");
+}
+
+function resetAnimation() {
+  if (!hasAnimatableSolution()) {
+    return;
+  }
+
+  state.animation.playing = false;
+  state.animation.pathIndex = 0;
+  state.animation.progress = 0;
+
+  const path = state.result.path;
+  const start = path[0];
+  taxiMesh.position.set(start.col * tileSize, taxiWorldY(), start.row * tileSize);
+  hidePickedPassengers(start.pickedUp);
+
+  if (path.length >= 2) {
+    const next = path[1];
+    setTaxiHeading(next.row - start.row, next.col - start.col);
+  }
+
+  appendLog("Animacion reiniciada al inicio.");
 }
 
 function updateAnimation(delta) {
@@ -816,9 +907,12 @@ function tick(ts) {
 }
 
 function wireUiEvents() {
-  dom.loadBtn.addEventListener("click", loadSelectedMap);
+  dom.mapSelect.addEventListener("change", () => {
+    void loadSelectedMap();
+  });
   dom.solveBtn.addEventListener("click", solveCurrentMap);
-  dom.animateBtn.addEventListener("click", startAnimation);
+  dom.playFloatingBtn.addEventListener("click", startAnimation);
+  dom.resetFloatingBtn.addEventListener("click", resetAnimation);
 
   dom.clearLogBtn.addEventListener("click", clearLog);
 
@@ -861,6 +955,93 @@ function fillSelect(selectEl, values) {
   });
 }
 
+function syncSelectOptions(selectEl, values, preferredValue) {
+  const currentValues = Array.from(selectEl.options).map((opt) => opt.value);
+  const changedValues = !arraysEqual(currentValues, values);
+
+  if (changedValues) {
+    fillSelect(selectEl, values);
+  }
+
+  if (!values.length) {
+    return { changedValues, changedSelection: false };
+  }
+
+  const currentSelection = selectEl.value;
+  let nextSelection = currentSelection;
+
+  if (!values.includes(nextSelection)) {
+    if (preferredValue && values.includes(preferredValue)) {
+      nextSelection = preferredValue;
+    } else {
+      nextSelection = values[0];
+    }
+  }
+
+  const changedSelection = nextSelection !== currentSelection;
+  selectEl.value = nextSelection;
+  return { changedValues, changedSelection };
+}
+
+async function refreshAppState(options = {}) {
+  const { autoReloadCurrent = false } = options;
+
+  if (state.mapSyncInFlight) {
+    return;
+  }
+
+  state.mapSyncInFlight = true;
+  try {
+    const appState = await bridgeCall("get_app_state");
+    const oldSelectedMap = dom.mapSelect.value;
+    const worldMapName = state.world ? state.world.mapName : null;
+
+    state.maps = appState.maps;
+    state.algorithms = appState.algorithms;
+
+    const mapSync = syncSelectOptions(dom.mapSelect, state.maps, worldMapName || oldSelectedMap);
+    syncSelectOptions(dom.algorithmSelect, state.algorithms, dom.algorithmSelect.value);
+
+    if (!state.maps.length) {
+      state.currentMapSignature = null;
+      return;
+    }
+
+    const selectedMap = dom.mapSelect.value;
+    const selectedSignature = (appState.mapMeta && appState.mapMeta[selectedMap]) || null;
+    const currentMapVisible = Boolean(state.world && state.world.mapName === selectedMap);
+    const mapFileChanged = Boolean(
+      currentMapVisible &&
+        state.currentMapSignature &&
+        selectedSignature &&
+        selectedSignature !== state.currentMapSignature
+    );
+
+    if (autoReloadCurrent && mapFileChanged) {
+      if (state.animation.playing) {
+        state.animation.playing = false;
+      }
+      appendLog(`Cambio detectado en ${selectedMap}. Recargando mapa...`);
+      await loadSelectedMap({ skipMetrics: true });
+      return;
+    }
+
+    if (autoReloadCurrent && mapSync.changedSelection && !state.animation.playing) {
+      appendLog(`Lista de mapas actualizada. Cargando ${selectedMap}...`);
+      await loadSelectedMap({ skipMetrics: true });
+      return;
+    }
+
+    if (currentMapVisible) {
+      state.currentMapSignature = selectedSignature;
+    }
+  } catch (error) {
+    appendLog(`Error refrescando mapas: ${error.message}`);
+  } finally {
+    state.mapSyncInFlight = false;
+  }
+}
+
 async function init() {
   wireUiEvents();
   setupManualOrbitEvents();
@@ -868,16 +1049,16 @@ async function init() {
   requestAnimationFrame(tick);
 
   try {
-    const appState = await bridgeCall("get_app_state");
-    state.maps = appState.maps;
-    state.algorithms = appState.algorithms;
-
-    fillSelect(dom.mapSelect, state.maps);
-    fillSelect(dom.algorithmSelect, state.algorithms);
+    updateFloatingControls();
+    await refreshAppState({ autoReloadCurrent: false });
 
     if (state.maps.length > 0) {
       await loadSelectedMap();
     }
+
+    state.mapRefreshTimer = window.setInterval(() => {
+      void refreshAppState({ autoReloadCurrent: true });
+    }, 1000);
 
     appendLog("Interfaz 3D inicializada.");
   } catch (error) {

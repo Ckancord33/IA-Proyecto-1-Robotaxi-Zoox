@@ -34,6 +34,7 @@ from utils.map_loader import load_world
 
 _WEB_DIR = os.path.join(_HERE, "web")
 _MAP_PATHS: dict[str, str] = {}
+_MAPS_DIR: str = "maps"
 _ALGORITHMS = {
     "BFS": BFS,
     "DFS": DFS,
@@ -77,16 +78,31 @@ def _discover_maps(maps_dir: str) -> dict[str, str]:
     raise FileNotFoundError(f"No se encontraron mapas en '{maps_dir}'")
 
 
+def _refresh_map_paths() -> None:
+    """Actualiza el indice de mapas para reflejar cambios en disco en tiempo real."""
+    global _MAP_PATHS
+    _MAP_PATHS = _discover_maps(_MAPS_DIR)
+
+
 def _load_world_for(map_name: str) -> World:
+    _refresh_map_paths()
     if map_name not in _MAP_PATHS:
         raise ValueError(f"Mapa no valido: {map_name}")
     world_grid = load_world(_MAP_PATHS[map_name])
     return World(world_grid)
 
 
+def _map_signature(map_name: str) -> str:
+    """Firma de archivo para detectar cambios (mtime + tamano)."""
+    path = _MAP_PATHS[map_name]
+    stat = os.stat(path)
+    return f"{stat.st_mtime_ns}:{stat.st_size}"
+
+
 def _serialize_world(world: World, map_name: str) -> dict[str, Any]:
     return {
         "mapName": map_name,
+        "sourceSignature": _map_signature(map_name),
         "rows": world.rows,
         "cols": world.cols,
         "grid": [list(row) for row in world.grid],
@@ -146,8 +162,10 @@ def _serialize_result(result) -> dict[str, Any]:
 @eel.expose
 def get_app_state() -> dict[str, Any]:
     """Devuelve listas para poblar la UI."""
+    _refresh_map_paths()
     return {
         "maps": sorted(_MAP_PATHS.keys()),
+        "mapMeta": {name: _map_signature(name) for name in sorted(_MAP_PATHS.keys())},
         "algorithms": sorted(_ALGORITHMS.keys()),
     }
 
@@ -200,8 +218,9 @@ def solve_map(map_name: str, algorithm_name: str) -> dict[str, Any]:
 
 def launch(maps_dir: str = "maps"):
     """Abre una ventana de escritorio con interfaz 3D (sin pestaña de localhost)."""
-    global _MAP_PATHS
+    global _MAP_PATHS, _MAPS_DIR
 
+    _MAPS_DIR = maps_dir
     _MAP_PATHS = _discover_maps(maps_dir)
 
     if not os.path.isdir(_WEB_DIR):

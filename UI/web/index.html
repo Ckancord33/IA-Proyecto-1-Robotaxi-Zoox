@@ -24,9 +24,7 @@
         <select id="algorithmSelect"></select>
 
         <div class="buttons">
-          <button id="loadBtn" class="ghost">Cargar Mapa</button>
           <button id="solveBtn" class="accent">Calcular Solucion</button>
-          <button id="animateBtn" class="warn">Animar Ruta</button>
         </div>
 
         <div class="speed-box">
@@ -50,6 +48,19 @@
       </aside>
 
       <main class="scene-panel">
+        <div id="sceneLoading" class="scene-loading" aria-live="polite" hidden>
+          <div class="loader-dot" aria-hidden="true"></div>
+          <span id="sceneLoadingText">Cargando mapa...</span>
+        </div>
+
+        <div class="floating-controls">
+          <button id="playFloatingBtn" class="fab play" title="Primero calcula la solucion." disabled>
+            ▶
+          </button>
+          <button id="resetFloatingBtn" class="fab reset" title="Reiniciar animacion">
+            ↺
+          </button>
+        </div>
         <div id="sceneCanvas"></div>
       </main>
     </div>
