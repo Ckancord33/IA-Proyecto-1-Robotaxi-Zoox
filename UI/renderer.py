@@ -10,7 +10,9 @@ Mantiene una API simple para no complicar la comunicacion entre archivos:
 from __future__ import annotations
 
 import glob
+import multiprocessing as mp
 import os
+from queue import Empty
 import socket
 import sys
 from pathlib import Path
@@ -35,6 +37,10 @@ from utils.map_loader import load_world
 _WEB_DIR = os.path.join(_HERE, "web")
 _MAP_PATHS: dict[str, str] = {}
 _MAPS_DIR: str = "maps"
+_ACTIVE_SOLVE_PROCESS: mp.Process | None = None
+_ACTIVE_SOLVE_QUEUE: mp.Queue | None = None
+_ACTIVE_SOLVE_ID: int | None = None
+_SOLVE_COUNTER: int = 0
 _ALGORITHMS = {
     "BFS": BFS,
     "DFS": DFS,
@@ -159,6 +165,54 @@ def _serialize_result(result) -> dict[str, Any]:
     }
 
 
+def _serialize_world_data(world: World, map_name: str, map_path: str) -> dict[str, Any]:
+    stat = os.stat(map_path)
+    return {
+        "mapName": map_name,
+        "sourceSignature": f"{stat.st_mtime_ns}:{stat.st_size}",
+        "rows": world.rows,
+        "cols": world.cols,
+        "grid": [list(row) for row in world.grid],
+        "start": [world.start[0], world.start[1]],
+        "goal": [world.goal[0], world.goal[1]],
+        "passengers": [[r, c] for r, c in world.passengers],
+    }
+
+
+def _solve_worker(map_name: str, map_path: str, algorithm_name: str, out_queue: mp.Queue):
+    """Proceso aislado para poder cancelar con terminate()."""
+    try:
+        if algorithm_name not in _ALGORITHMS:
+            raise ValueError(f"Algoritmo no valido: {algorithm_name}")
+
+        world_grid = load_world(map_path)
+        world = World(world_grid)
+        problem = Problem(world)
+        algorithm_cls = _ALGORITHMS[algorithm_name]
+        solver = algorithm_cls(problem)
+        result = solver.solve()
+
+        out_queue.put(
+            {
+                "ok": True,
+                "payload": {
+                    "world": _serialize_world_data(world, map_name, map_path),
+                    "algorithm": algorithm_name,
+                    "result": _serialize_result(result),
+                },
+            }
+        )
+    except Exception as exc:  # pragma: no cover - proceso aislado
+        out_queue.put({"ok": False, "error": str(exc)})
+
+
+def _cleanup_active_solve() -> None:
+    global _ACTIVE_SOLVE_PROCESS, _ACTIVE_SOLVE_QUEUE, _ACTIVE_SOLVE_ID
+    _ACTIVE_SOLVE_PROCESS = None
+    _ACTIVE_SOLVE_QUEUE = None
+    _ACTIVE_SOLVE_ID = None
+
+
 @eel.expose
 def get_app_state() -> dict[str, Any]:
     """Devuelve listas para poblar la UI."""
@@ -210,6 +264,108 @@ def solve_map(map_name: str, algorithm_name: str) -> dict[str, Any]:
             },
         }
     except Exception as exc:  # pragma: no cover - proteccion de capa API
+        return {
+            "ok": False,
+            "error": str(exc),
+        }
+
+
+@eel.expose
+def start_solve(map_name: str, algorithm_name: str) -> dict[str, Any]:
+    """Inicia un calculo en segundo plano y retorna un ID para hacer polling."""
+    global _ACTIVE_SOLVE_PROCESS, _ACTIVE_SOLVE_QUEUE, _ACTIVE_SOLVE_ID, _SOLVE_COUNTER
+    try:
+        if _ACTIVE_SOLVE_PROCESS and _ACTIVE_SOLVE_PROCESS.is_alive():
+            return {
+                "ok": False,
+                "error": "Ya hay un calculo en curso. Cancela el actual antes de iniciar otro.",
+            }
+
+        _refresh_map_paths()
+        if map_name not in _MAP_PATHS:
+            raise ValueError(f"Mapa no valido: {map_name}")
+        if algorithm_name not in _ALGORITHMS:
+            raise ValueError(f"Algoritmo no valido: {algorithm_name}")
+
+        _SOLVE_COUNTER += 1
+        solve_id = _SOLVE_COUNTER
+
+        queue_obj: mp.Queue = mp.Queue()
+        process = mp.Process(
+            target=_solve_worker,
+            args=(map_name, _MAP_PATHS[map_name], algorithm_name, queue_obj),
+            daemon=True,
+        )
+        process.start()
+
+        _ACTIVE_SOLVE_ID = solve_id
+        _ACTIVE_SOLVE_QUEUE = queue_obj
+        _ACTIVE_SOLVE_PROCESS = process
+
+        return {"ok": True, "solveId": solve_id}
+    except Exception as exc:  # pragma: no cover - proteccion de capa API
+        _cleanup_active_solve()
+        return {
+            "ok": False,
+            "error": str(exc),
+        }
+
+
+@eel.expose
+def get_solve_status(solve_id: int) -> dict[str, Any]:
+    """Consulta estado de un calculo activo: running/done/error/cancelled."""
+    global _ACTIVE_SOLVE_PROCESS
+    try:
+        if _ACTIVE_SOLVE_ID is None:
+            return {"ok": True, "state": "idle"}
+
+        if solve_id != _ACTIVE_SOLVE_ID:
+            return {"ok": True, "state": "stale"}
+
+        if _ACTIVE_SOLVE_PROCESS and _ACTIVE_SOLVE_PROCESS.is_alive():
+            return {"ok": True, "state": "running"}
+
+        if _ACTIVE_SOLVE_QUEUE is not None:
+            try:
+                payload = _ACTIVE_SOLVE_QUEUE.get_nowait()
+            except Empty:
+                payload = {"ok": False, "error": "El calculo termino sin devolver resultado."}
+
+            if payload.get("ok"):
+                _cleanup_active_solve()
+                return {"ok": True, "state": "done", "payload": payload["payload"]}
+
+            _cleanup_active_solve()
+            return {"ok": True, "state": "error", "error": payload.get("error", "Error desconocido")}
+
+        _cleanup_active_solve()
+        return {"ok": True, "state": "error", "error": "No hay cola de resultado activa."}
+    except Exception as exc:  # pragma: no cover - proteccion de capa API
+        _cleanup_active_solve()
+        return {
+            "ok": False,
+            "error": str(exc),
+        }
+
+
+@eel.expose
+def cancel_solve(solve_id: int) -> dict[str, Any]:
+    """Cancela el calculo activo terminando el proceso de solve."""
+    try:
+        if _ACTIVE_SOLVE_ID is None:
+            return {"ok": True, "state": "idle"}
+
+        if solve_id != _ACTIVE_SOLVE_ID:
+            return {"ok": True, "state": "stale"}
+
+        if _ACTIVE_SOLVE_PROCESS and _ACTIVE_SOLVE_PROCESS.is_alive():
+            _ACTIVE_SOLVE_PROCESS.terminate()
+            _ACTIVE_SOLVE_PROCESS.join(timeout=0.5)
+
+        _cleanup_active_solve()
+        return {"ok": True, "state": "cancelled"}
+    except Exception as exc:  # pragma: no cover - proteccion de capa API
+        _cleanup_active_solve()
         return {
             "ok": False,
             "error": str(exc),

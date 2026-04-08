@@ -110,6 +110,11 @@ button.accent {
   background: linear-gradient(95deg, #0089a8, var(--accent));
 }
 
+button.danger {
+  background: linear-gradient(95deg, #b0122a, #e03131);
+  border-color: #ff6a7e;
+}
+
 button.warn {
   background: linear-gradient(95deg, #d66d2f, var(--warn));
 }

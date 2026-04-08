@@ -29,6 +29,17 @@ const state = {
   currentMapSignature: null,
   mapSyncInFlight: false,
   mapRefreshTimer: null,
+  solve: {
+    running: false,
+    id: null,
+    pollTimer: null,
+  },
+  solvedContext: {
+    mapName: null,
+    algorithm: null,
+    canAnimate: false,
+  },
+  lastAlgorithmSelection: null,
   animation: {
     playing: false,
     pathIndex: 0,
@@ -69,7 +80,7 @@ if (!window.THREE) {
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x14181f);
-scene.fog = new THREE.Fog(0x14181f, 38, 120);
+scene.fog = null;
 
 const camera = new THREE.PerspectiveCamera(55, 1, 0.1, 300);
 camera.position.set(18, 20, 24);
@@ -288,6 +299,28 @@ function clearLog() {
   dom.logOutput.textContent = "";
 }
 
+function updateSolveButton() {
+  if (state.solve.running) {
+    dom.solveBtn.textContent = "Cancelar Calculo";
+    dom.solveBtn.classList.add("danger");
+    return;
+  }
+  if (state.solvedContext.canAnimate) {
+    dom.solveBtn.textContent = "Animar Solucion";
+    dom.solveBtn.classList.remove("danger");
+    return;
+  }
+  dom.solveBtn.textContent = "Calcular Solucion";
+  dom.solveBtn.classList.remove("danger");
+}
+
+function resetSolvedContext() {
+  state.solvedContext.mapName = null;
+  state.solvedContext.algorithm = null;
+  state.solvedContext.canAnimate = false;
+  updateSolveButton();
+}
+
 function setSceneLoading(isLoading, text = "Cargando mapa...") {
   if (!dom.sceneLoading) {
     return;
@@ -313,6 +346,20 @@ function updateFloatingControls() {
   dom.resetFloatingBtn.title = hasSolution
     ? "Reiniciar animacion"
     : "No hay animacion para reiniciar.";
+}
+
+function stopSolvePolling() {
+  if (state.solve.pollTimer) {
+    window.clearInterval(state.solve.pollTimer);
+    state.solve.pollTimer = null;
+  }
+}
+
+function markSolveStopped() {
+  state.solve.running = false;
+  state.solve.id = null;
+  stopSolvePolling();
+  updateSolveButton();
 }
 
 function arraysEqual(a, b) {
@@ -750,6 +797,7 @@ async function loadSelectedMap(options = {}) {
     renderWorld(response.payload.world);
     state.currentMapSignature = response.payload.world.sourceSignature || null;
     state.result = null;
+    resetSolvedContext();
     state.animation.playing = false;
     state.animation.pathIndex = 0;
     state.animation.progress = 0;
@@ -785,37 +833,116 @@ function resultToMetrics(result, algorithmName) {
 }
 
 async function solveCurrentMap() {
+  if (state.solve.running && state.solve.id !== null) {
+    const cancelResponse = await bridgeCall("cancel_solve", state.solve.id);
+    if (!cancelResponse.ok) {
+      appendLog(`Error cancelando calculo: ${cancelResponse.error}`);
+      return;
+    }
+    markSolveStopped();
+    setSceneLoading(false);
+    appendLog("Calculo cancelado por el usuario.");
+    return;
+  }
+
   const mapName = dom.mapSelect.value;
   const algorithm = dom.algorithmSelect.value;
 
-  appendLog(`Calculando ${algorithm} en ${mapName}...`);
-  const response = await bridgeCall("solve_map", mapName, algorithm);
+  if (
+    state.solvedContext.canAnimate &&
+    state.solvedContext.mapName === mapName &&
+    state.solvedContext.algorithm === algorithm
+  ) {
+    startAnimation();
+    return;
+  }
 
-  if (!response.ok) {
-    appendLog(`Error en solver: ${response.error}`);
+  appendLog(`Calculando ${algorithm} en ${mapName}...`);
+  const startResponse = await bridgeCall("start_solve", mapName, algorithm);
+  if (!startResponse.ok) {
+    appendLog(`Error iniciando solver: ${startResponse.error}`);
     updateFloatingControls();
     return;
   }
 
-  state.world = response.payload.world;
-  state.currentMapSignature = response.payload.world.sourceSignature || null;
-  state.result = response.payload.result;
+  state.solve.running = true;
+  state.solve.id = startResponse.solveId;
+  updateSolveButton();
+  setSceneLoading(true, `Calculando ${algorithm}...`);
 
-  renderWorld(state.world, { preserveCamera: true });
-  createRouteLine(state.result.path);
+  stopSolvePolling();
+  state.solve.pollTimer = window.setInterval(async () => {
+    if (!state.solve.running || state.solve.id === null) {
+      return;
+    }
 
-  setMetrics(resultToMetrics(state.result, response.payload.algorithm));
+    try {
+      const status = await bridgeCall("get_solve_status", state.solve.id);
+      if (!status.ok) {
+        appendLog(`Error consultando solver: ${status.error}`);
+        markSolveStopped();
+        setSceneLoading(false);
+        return;
+      }
 
-  if (state.result.found) {
-    appendLog(`Solucion encontrada. Costo ${state.result.cost}, pasos ${state.result.actions.length}.`);
-  } else {
-    appendLog("No se encontro solucion.");
-  }
+      if (status.state === "running") {
+        return;
+      }
 
-  state.animation.playing = false;
-  state.animation.pathIndex = 0;
-  state.animation.progress = 0;
-  updateFloatingControls();
+      if (status.state === "done") {
+        const payload = status.payload;
+        state.world = payload.world;
+        state.currentMapSignature = payload.world.sourceSignature || null;
+        state.result = payload.result;
+
+        renderWorld(state.world, { preserveCamera: true });
+        createRouteLine(state.result.path);
+
+        setMetrics(resultToMetrics(state.result, payload.algorithm));
+
+        if (state.result.found) {
+          appendLog(`Solucion encontrada. Costo ${state.result.cost}, pasos ${state.result.actions.length}.`);
+          state.solvedContext.mapName = mapName;
+          state.solvedContext.algorithm = algorithm;
+          state.solvedContext.canAnimate = true;
+        } else {
+          appendLog("No se encontro solucion.");
+          state.solvedContext.mapName = null;
+          state.solvedContext.algorithm = null;
+          state.solvedContext.canAnimate = false;
+        }
+
+        state.animation.playing = false;
+        state.animation.pathIndex = 0;
+        state.animation.progress = 0;
+        updateFloatingControls();
+
+        markSolveStopped();
+        setSceneLoading(false);
+        updateSolveButton();
+        return;
+      }
+
+      if (status.state === "error") {
+        appendLog(`Error en solver: ${status.error}`);
+        markSolveStopped();
+        setSceneLoading(false);
+        updateFloatingControls();
+        return;
+      }
+
+      if (status.state === "cancelled" || status.state === "idle" || status.state === "stale") {
+        markSolveStopped();
+        setSceneLoading(false);
+        updateFloatingControls();
+      }
+    } catch (error) {
+      appendLog(`Error consultando solver: ${error.message}`);
+      markSolveStopped();
+      setSceneLoading(false);
+      updateFloatingControls();
+    }
+  }, 180);
 }
 
 function startAnimation() {
@@ -908,7 +1035,27 @@ function tick(ts) {
 
 function wireUiEvents() {
   dom.mapSelect.addEventListener("change", () => {
+    if (state.solve.running) {
+      appendLog("No puedes cambiar de mapa mientras hay un calculo en curso.");
+      dom.mapSelect.value = state.world ? state.world.mapName : dom.mapSelect.value;
+      return;
+    }
+    resetSolvedContext();
     void loadSelectedMap();
+  });
+  dom.algorithmSelect.addEventListener("change", () => {
+    if (state.solve.running) {
+      appendLog("No puedes cambiar de algoritmo mientras hay un calculo en curso.");
+      if (state.lastAlgorithmSelection) {
+        dom.algorithmSelect.value = state.lastAlgorithmSelection;
+      }
+      return;
+    }
+    state.lastAlgorithmSelection = dom.algorithmSelect.value;
+    state.result = null;
+    resetSolvedContext();
+    updateFloatingControls();
+    setMetrics("Mapa listo. Ejecuta 'Calcular Solucion'.");
   });
   dom.solveBtn.addEventListener("click", solveCurrentMap);
   dom.playFloatingBtn.addEventListener("click", startAnimation);
@@ -986,6 +1133,10 @@ function syncSelectOptions(selectEl, values, preferredValue) {
 async function refreshAppState(options = {}) {
   const { autoReloadCurrent = false } = options;
 
+  if (state.solve.running) {
+    return;
+  }
+
   if (state.mapSyncInFlight) {
     return;
   }
@@ -1049,8 +1200,11 @@ async function init() {
   requestAnimationFrame(tick);
 
   try {
+    updateSolveButton();
     updateFloatingControls();
     await refreshAppState({ autoReloadCurrent: false });
+
+    state.lastAlgorithmSelection = dom.algorithmSelect.value || null;
 
     if (state.maps.length > 0) {
       await loadSelectedMap();
