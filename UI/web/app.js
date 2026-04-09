@@ -20,6 +20,38 @@ const TAXI_MODEL_CONFIG = {
   headingOffset: Math.PI / 2,
 };
 
+const SCENE_LOOK = {
+  exposure: 1.2,
+  hemiIntensity: 0.72,
+  keyLightIntensity: 1.12,
+  fillLightIntensity: 0.28,
+  rimLightIntensity: 0.2,
+};
+
+const TAXI_LIGHT_CONFIG = {
+  color: 0x78bdff,
+  intensity: 0.01,
+  distance: 4.2,
+  decay: 2,
+  yOffset: 1.05,
+};
+
+const TAXI_COLOR_CONFIG = {
+  enabled: true,
+  
+  tint: 0x59b7ff,
+  tronBodyColor: 0x0b0f14,
+  tronAccentColor: 0x4fb6ff,
+  neutralSaturationFloor: 0.28,
+  saturationBoost: 1.22,
+  lightnessBoost: 1.04,
+  roughnessDelta: 0.16,
+  metalnessScale: 0.52,
+  emissiveTint: 0x1a5e8a,
+  emissiveIntensityFloor: 0.08,
+  neutralLightnessThreshold: 0.55,
+};
+
 const state = {
   maps: [],
   algorithms: [],
@@ -91,6 +123,13 @@ camera.position.set(18, 20, 24);
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.shadowMap.enabled = true;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = SCENE_LOOK.exposure;
+if ("physicallyCorrectLights" in renderer) {
+  renderer.physicallyCorrectLights = true;
+}
 dom.sceneCanvas.appendChild(renderer.domElement);
 
 let controls = null;
@@ -126,21 +165,35 @@ if (typeof THREE.OrbitControls === "function") {
   //appendLog("OrbitControls no disponible. Se activa modo manual.");
 }
 
-const hemi = new THREE.HemisphereLight(0xb8d4ff, 0x12161e, 1.1);
+const hemi = new THREE.HemisphereLight(0xa9d2ff, 0x0d1118, SCENE_LOOK.hemiIntensity);
 scene.add(hemi);
 
-const directional = new THREE.DirectionalLight(0xffffff, 1.2);
+const directional = new THREE.DirectionalLight(0xffffff, SCENE_LOOK.keyLightIntensity);
 directional.position.set(18, 24, 10);
+directional.castShadow = true;
+directional.shadow.mapSize.set(2048, 2048);
+directional.shadow.camera.near = 1;
+directional.shadow.camera.far = 120;
+directional.shadow.camera.left = -40;
+directional.shadow.camera.right = 40;
+directional.shadow.camera.top = 40;
+directional.shadow.camera.bottom = -40;
+directional.shadow.bias = -0.00012;
 scene.add(directional);
 
-const fillLight = new THREE.DirectionalLight(0x8bd3ff, 0.42);
+const fillLight = new THREE.DirectionalLight(0x8bd3ff, SCENE_LOOK.fillLightIntensity);
 fillLight.position.set(-14, 10, -8);
 scene.add(fillLight);
+
+const rimLight = new THREE.DirectionalLight(0xffd1a8, SCENE_LOOK.rimLightIntensity);
+rimLight.position.set(-20, 8, 16);
+scene.add(rimLight);
 
 const boardGroup = new THREE.Group();
 scene.add(boardGroup);
 
 const passengerMeshes = new Map();
+const goalMarkers = [];
 const modelCache = new Map();
 let taxiMesh = null;
 let routeLine = null;
@@ -415,6 +468,7 @@ function resetBoard() {
     boardGroup.remove(child);
   }
   passengerMeshes.clear();
+  goalMarkers.length = 0;
   taxiMesh = null;
   routeLine = null;
   state.taxiUsesModel = false;
@@ -440,9 +494,10 @@ function createNeonRoadCell(type, height, x, z) {
       roughness: 0.7,
       metalness: 0.05,
       emissive: neon,
-      emissiveIntensity: 0.09,
+      emissiveIntensity: 0.05,
     })
   );
+  base.receiveShadow = true;
   base.position.y = height / 2;
   tileGroup.add(base);
 
@@ -471,10 +526,12 @@ function createNeonWallCell(height, x, z) {
     new THREE.BoxGeometry(1.8, height, 1.8),
     new THREE.MeshStandardMaterial({
       color: 0x010203,
-      roughness: 0.85,
-      metalness: 0.05,
+      roughness: 0.88,
+      metalness: 0.03,
     })
   );
+  wall.castShadow = true;
+  wall.receiveShadow = true;
   wall.position.y = height / 2;
   wallGroup.add(wall);
 
@@ -489,9 +546,9 @@ function createNeonWallCell(height, x, z) {
   const bandMaterial = new THREE.MeshStandardMaterial({
     color: neonBlue,
     emissive: neonBlue,
-    emissiveIntensity: 0.5,
-    roughness: 0.35,
-    metalness: 0.2,
+    emissiveIntensity: 0.28,
+    roughness: 0.48,
+    metalness: 0.12,
   });
 
   const bandA = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.03, 1.82), bandMaterial);
@@ -521,15 +578,143 @@ function createRouteLine(path) {
 function createTaxiFallbackMesh() {
   const body = new THREE.Mesh(
     new THREE.BoxGeometry(1.35, 0.7, 1.0),
-    new THREE.MeshStandardMaterial({ color: 0xffdc45, roughness: 0.42 })
+    new THREE.MeshStandardMaterial({ color: 0xffcf30, roughness: 0.62, metalness: 0.06 })
   );
   const roof = new THREE.Mesh(
     new THREE.BoxGeometry(0.8, 0.35, 0.78),
-    new THREE.MeshStandardMaterial({ color: 0x1f324a, roughness: 0.3 })
+    new THREE.MeshStandardMaterial({ color: 0x1f324a, roughness: 0.42, metalness: 0.12 })
   );
   roof.position.y = 0.5;
   body.add(roof);
+  body.castShadow = true;
+  body.receiveShadow = true;
+  roof.castShadow = true;
+  roof.receiveShadow = true;
   return body;
+}
+
+function createTaxiAccentLight() {
+  const light = new THREE.PointLight(
+    TAXI_LIGHT_CONFIG.color,
+    TAXI_LIGHT_CONFIG.intensity,
+    TAXI_LIGHT_CONFIG.distance,
+    TAXI_LIGHT_CONFIG.decay
+  );
+  light.position.set(0, TAXI_LIGHT_CONFIG.yOffset, 0);
+  return light;
+}
+
+function createGoalStarMarker(x, y, z) {
+  const group = new THREE.Group();
+  group.position.set(x, y, z);
+
+  const starShape = new THREE.Shape();
+  const spikes = 5;
+  const outerRadius = 0.34;
+  const innerRadius = 0.16;
+
+  for (let i = 0; i < spikes * 2; i += 1) {
+    const radius = i % 2 === 0 ? outerRadius : innerRadius;
+    const angle = (i * Math.PI) / spikes - Math.PI / 2;
+    const px = Math.cos(angle) * radius;
+    const py = Math.sin(angle) * radius;
+    if (i === 0) {
+      starShape.moveTo(px, py);
+    } else {
+      starShape.lineTo(px, py);
+    }
+  }
+  starShape.closePath();
+
+  const starGeometry = new THREE.ExtrudeGeometry(starShape, {
+    depth: 0.16,
+    bevelEnabled: true,
+    bevelSize: 0.02,
+    bevelThickness: 0.025,
+    bevelSegments: 2,
+    steps: 1,
+  });
+  starGeometry.center();
+
+  const star = new THREE.Mesh(
+    starGeometry,
+    new THREE.MeshStandardMaterial({
+      color: 0xffc648,
+      emissive: 0x8c4a00,
+      emissiveIntensity: 0.16,
+      roughness: 0.38,
+      metalness: 0.52,
+    })
+  );
+  star.castShadow = true;
+  star.receiveShadow = true;
+  group.add(star);
+
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.36, 0.02, 12, 36),
+    new THREE.MeshStandardMaterial({
+      color: 0xffd78a,
+      emissive: 0xffb74d,
+      emissiveIntensity: 0.22,
+      roughness: 0.45,
+      metalness: 0.24,
+    })
+  );
+  halo.rotation.x = Math.PI / 2;
+  halo.position.y = -0.02;
+  halo.castShadow = true;
+  group.add(halo);
+
+  goalMarkers.push(group);
+  return group;
+}
+
+function boostMaterialColor(material) {
+  if (!material || !material.isMaterial) {
+    return;
+  }
+
+  if (material.color && material.color.isColor) {
+    const hsl = { h: 0, s: 0, l: 0 };
+    material.color.getHSL(hsl);
+
+    const isBlueAccent = hsl.s > 0.14 && hsl.h >= 0.5 && hsl.h <= 0.68;
+    const isVeryLightNeutral = hsl.s < 0.14 && hsl.l >= TAXI_COLOR_CONFIG.neutralLightnessThreshold;
+    const isGenericNeutral = hsl.s < 0.1;
+
+    if (TAXI_COLOR_CONFIG.enabled && (isVeryLightNeutral || isGenericNeutral)) {
+      // La mayor parte del modelo pasa a negro grafito para evitar el blanco lavado.
+      material.color.copy(new THREE.Color(TAXI_COLOR_CONFIG.tronBodyColor));
+    } else if (TAXI_COLOR_CONFIG.enabled && isBlueAccent) {
+      // Conserva/realza acentos azules.
+      material.color.copy(new THREE.Color(TAXI_COLOR_CONFIG.tronAccentColor));
+    } else {
+      // Cualquier otro color se oscurece hacia base grafito.
+      material.color.lerp(new THREE.Color(TAXI_COLOR_CONFIG.tronBodyColor), 0.65);
+    }
+  }
+
+  if (typeof material.roughness === "number") {
+    material.roughness = THREE.MathUtils.clamp(material.roughness + TAXI_COLOR_CONFIG.roughnessDelta, 0.08, 1.0);
+  }
+
+  if (typeof material.metalness === "number") {
+    material.metalness = THREE.MathUtils.clamp(material.metalness * TAXI_COLOR_CONFIG.metalnessScale, 0, 1.0);
+  }
+
+  if (material.emissive && material.emissive.isColor) {
+    material.emissive.lerp(new THREE.Color(TAXI_COLOR_CONFIG.emissiveTint), 0.55);
+  }
+
+  if (typeof material.emissiveIntensity === "number") {
+    material.emissiveIntensity = THREE.MathUtils.clamp(
+      Math.max(material.emissiveIntensity * 0.84, TAXI_COLOR_CONFIG.emissiveIntensityFloor),
+      0,
+      2
+    );
+  }
+
+  material.needsUpdate = true;
 }
 
 function normalizeModelForTaxi(modelRoot) {
@@ -630,6 +815,12 @@ async function attachTaxiModel(taxiRoot, fallbackMesh) {
     if (obj && obj.isMesh) {
       obj.castShadow = true;
       obj.receiveShadow = true;
+
+      if (Array.isArray(obj.material)) {
+        obj.material.forEach((mat) => boostMaterialColor(mat));
+      } else {
+        boostMaterialColor(obj.material);
+      }
     }
   });
 
@@ -645,6 +836,7 @@ function createTaxi(position) {
 
   const fallbackMesh = createTaxiFallbackMesh();
   root.add(fallbackMesh);
+  root.add(createTaxiAccentLight());
 
   boardGroup.add(root);
   taxiMesh = root;
@@ -666,6 +858,7 @@ function renderWorld(world, options = {}) {
     new THREE.BoxGeometry(cols * tileSize + 2, 0.2, rows * tileSize + 2),
     new THREE.MeshStandardMaterial({ color: 0x050608, roughness: 0.95, metalness: 0.04 })
   );
+  basePlane.receiveShadow = true;
   basePlane.position.set(centerX, -0.15, centerZ);
   boardGroup.add(basePlane);
 
@@ -674,6 +867,7 @@ function renderWorld(world, options = {}) {
     new THREE.BoxGeometry(cols * tileSize, 0.06, rows * tileSize),
     new THREE.MeshStandardMaterial({ color: 0x020305, roughness: 0.88, metalness: 0.04 })
   );
+  roadDeck.receiveShadow = true;
   roadDeck.position.set(centerX, 0.03, centerZ);
   boardGroup.add(roadDeck);
 
@@ -703,22 +897,20 @@ function renderWorld(world, options = {}) {
           new THREE.MeshStandardMaterial({
             color: 0xf7fdff,
             emissive: 0xd8f8ff,
-            emissiveIntensity: 0.42,
-            roughness: 0.24,
+            emissiveIntensity: 0.24,
+            roughness: 0.36,
             metalness: 0.08,
           })
         );
+        passenger.castShadow = true;
+        passenger.receiveShadow = true;
         passenger.position.set(c * tileSize, h + 0.36, r * tileSize);
         boardGroup.add(passenger);
         passengerMeshes.set(`${r}-${c}`, passenger);
       }
 
       if (type === CELL_GOAL) {
-        const marker = new THREE.Mesh(
-          new THREE.ConeGeometry(0.3, 0.9, 6),
-          new THREE.MeshStandardMaterial({ color: 0xffb05a, emissive: 0x361500 })
-        );
-        marker.position.set(c * tileSize, h + 0.45, r * tileSize);
+        const marker = createGoalStarMarker(c * tileSize, h + 0.52, r * tileSize);
         boardGroup.add(marker);
       }
     }
@@ -1041,6 +1233,10 @@ let lastTs = performance.now();
 function tick(ts) {
   const delta = (ts - lastTs) / 1000;
   lastTs = ts;
+
+  for (const marker of goalMarkers) {
+    marker.rotation.y += delta * 0.95;
+  }
 
   resizeRenderer();
   updateAnimation(delta);
