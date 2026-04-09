@@ -28,6 +28,8 @@ class aStarSearch(Algorithm):
 
     cont = 0
     root = self._make_root()
+    if(config == 1):
+      visited.add(root.state)
     pq.put((heuristic(root.state)+root.cost, cont, root))
     cont += 1
 
@@ -53,8 +55,6 @@ class aStarSearch(Algorithm):
           time=time.time() - start_time,
           algorithm=algorithm_name,
         )
-      if(config == 1):
-        visited.add(node.state)
 
       nodes_expanded += 1
       for child in self._expand(node):
@@ -65,6 +65,8 @@ class aStarSearch(Algorithm):
           cond = self.problem.is_in_branch(child)
         if cond:
           continue
+        if(config == 1):
+          visited.add(child.state)
         pq.put((heuristic(child.state)+child.cost, cont, child))
         cont += 1
 

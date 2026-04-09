@@ -24,6 +24,8 @@ class DFS(Algorithm):
     stack = []
 
     root = self._make_root()
+    if(config == 1):
+      visited.add(root.state)
     stack.append(root)
     emit_progress = self._make_progress_reporter(
       algorithm_name=algorithm_name,
@@ -47,8 +49,6 @@ class DFS(Algorithm):
           time=time.time() - start_time,
           algorithm=algorithm_name,
         )
-      if(config == 1):
-        visited.add(node.state)
 
       nodes_expanded += 1
       for child in self._expand(node):
@@ -59,6 +59,8 @@ class DFS(Algorithm):
           cond = self.problem.is_in_branch(child)
         if cond:
           continue
+        if(config == 1):
+          visited.add(child.state)
         stack.append(child)
 
       emit_progress(nodes_expanded=nodes_expanded, frontier_size=len(stack), force=False)

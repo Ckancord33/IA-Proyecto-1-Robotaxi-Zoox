@@ -39,6 +39,8 @@ class BFS(Algorithm):
     queue = deque()
 
     root = self._make_root()
+    if(config == 1):
+      visited.add(root.state)
     queue.append(root)
     emit_progress = self._make_progress_reporter(
       algorithm_name=algorithm_name,
@@ -62,9 +64,7 @@ class BFS(Algorithm):
           time=time.time() - start_time,
           algorithm=algorithm_name,
         )
-      if(config == 1):
-        visited.add(node.state)
-      
+
       nodes_expanded += 1
       for child in self._expand(node):
         cond = False
@@ -74,6 +74,8 @@ class BFS(Algorithm):
           cond = self.problem.is_in_branch(child)
         if cond:
           continue
+        if(config == 1):
+          visited.add(child.state)
         queue.append(child)
 
       emit_progress(nodes_expanded=nodes_expanded, frontier_size=len(queue), force=False)
