@@ -6,6 +6,8 @@ Los algoritmos solo interactúan con Problem — nunca con World directamente.
 """
 
 from abc import ABC, abstractmethod
+import time
+from typing import Callable
 from models.problem import Problem
 from models.node import Node
 from models.state import State
@@ -59,3 +61,55 @@ class Algorithm(ABC):
             )
             children.append(child)
         return children
+
+    def _make_progress_reporter(
+        self,
+        algorithm_name: str,
+        start_time: float,
+        progress_callback: Callable[[dict], bool] | None = None,
+        progress_interval: float = 1.0,
+    ):
+        """
+        Crea un emisor de progreso reutilizable para cualquier algoritmo.
+
+        Uso:
+          emit = self._make_progress_reporter(...)
+          keep_running = emit(nodes_expanded, frontier_size, force=False)
+
+        Si progress_callback devuelve False, se interpreta como cancelacion.
+        """
+        interval = max(progress_interval, 0.05)
+        next_progress_at = start_time + interval
+
+        def emit(nodes_expanded: int, frontier_size: int, force: bool = False) -> bool:
+            nonlocal next_progress_at
+
+            if progress_callback is None:
+                return True
+
+            now = time.time()
+            if not force and now < next_progress_at:
+                return True
+
+            payload = {
+                "algorithm": algorithm_name,
+                "nodes_expanded": nodes_expanded,
+                "elapsed_time": now - start_time,
+                "frontier_size": frontier_size,
+            }
+            keep_running = progress_callback(payload)
+            next_progress_at = now + interval
+            return keep_running is not False
+
+        return emit
+
+    def _cancelled_result(self, start_time: float, nodes_expanded: int, algorithm_name: str) -> Result:
+        """Resultado estandar para cancelacion cooperativa."""
+        return Result(
+            solution=None,
+            nodes_expanded=nodes_expanded,
+            depth=0,
+            cost=0.0,
+            time=time.time() - start_time,
+            algorithm=algorithm_name,
+        )

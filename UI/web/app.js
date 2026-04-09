@@ -827,8 +827,21 @@ function resultToMetrics(result, algorithmName) {
     `Nodos expandidos: ${result.nodesExpanded}`,
     `Profundidad: ${result.depth}`,
     `Costo total: ${result.cost}`,
-    `Tiempo: ${result.time.toFixed(4)} s`,
-    `Pasos: ${result.actions.length}`,
+    `Tiempo: ${result.time.toFixed(4)} s`
+  ].join("\n");
+}
+
+function progressToMetrics(progress, algorithmName) {
+  const nodesExpanded = Number(progress?.nodes_expanded ?? 0);
+  const elapsed = Number(progress?.elapsed_time ?? 0);
+  const frontierSize = Number(progress?.frontier_size ?? 0);
+
+  return [
+    `Algoritmo: ${algorithmName}`,
+    "Resultado: calculando...",
+    `Nodos expandidos (parcial): ${nodesExpanded}`,
+    `Frontera actual: ${frontierSize}`,
+    `Tiempo transcurrido: ${elapsed.toFixed(2)} s`,
   ].join("\n");
 }
 
@@ -886,6 +899,10 @@ async function solveCurrentMap() {
       }
 
       if (status.state === "running") {
+        if (status.progress) {
+          const algorithmLabel = status.progress.algorithm || algorithm;
+          setMetrics(progressToMetrics(status.progress, algorithmLabel));
+        }
         return;
       }
 

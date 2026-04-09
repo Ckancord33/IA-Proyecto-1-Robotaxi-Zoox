@@ -3,7 +3,7 @@ from algorithms import Algorithm
 from utils.result import Result
 
 class DFS(Algorithm):
-  def solve(self, config=1) -> Result:
+  def solve(self, config=1, progress_callback=None, progress_interval=1.0) -> Result:
     """
     Encuentra la solucion al problema por amplitud.
 
@@ -15,6 +15,7 @@ class DFS(Algorithm):
         dado ya en su rama actual, recorriendola con is_in_branch.
     """
     start_time = time.time()
+    algorithm_name = "DFS"
     nodes_expanded = 0
 
     if(config == 1):
@@ -24,15 +25,27 @@ class DFS(Algorithm):
 
     root = self._make_root()
     stack.append(root)
+    emit_progress = self._make_progress_reporter(
+      algorithm_name=algorithm_name,
+      start_time=start_time,
+      progress_callback=progress_callback,
+      progress_interval=progress_interval,
+    )
+
     while stack:
+      if not emit_progress(nodes_expanded=nodes_expanded, frontier_size=len(stack), force=False):
+        return self._cancelled_result(start_time=start_time, nodes_expanded=nodes_expanded, algorithm_name=algorithm_name)
+
       node = stack.pop()
       if(self.problem.goal_test(node.state)):
+        emit_progress(nodes_expanded=nodes_expanded, frontier_size=len(stack), force=True)
         return Result(
           solution=node.get_path(),
           nodes_expanded=nodes_expanded,
           depth=node.depth,
           cost=node.cost,
-          time=time.time() - start_time
+          time=time.time() - start_time,
+          algorithm=algorithm_name,
         )
       if(config == 1):
         visited.add(node.state)
@@ -47,11 +60,16 @@ class DFS(Algorithm):
         if cond:
           continue
         stack.append(child)
+
+      emit_progress(nodes_expanded=nodes_expanded, frontier_size=len(stack), force=False)
+
+    emit_progress(nodes_expanded=nodes_expanded, frontier_size=0, force=True)
     
     return Result(
             solution=None,
             nodes_expanded=nodes_expanded,
             depth=0,
             cost=0.0,
-            time=time.time() - start_time
+            time=time.time() - start_time,
+            algorithm=algorithm_name,
         )

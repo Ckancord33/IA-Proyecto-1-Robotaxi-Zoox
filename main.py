@@ -14,7 +14,7 @@ def main():
     uno de los mapas en la carpeta /maps
   """
 
-  world_grid = load_world('maps/map1.txt')
+  world_grid = load_world('maps/main.txt')
   world = World(world_grid)
   problem = Problem(world)
 

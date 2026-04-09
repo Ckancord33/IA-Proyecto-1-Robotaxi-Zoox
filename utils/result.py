@@ -24,6 +24,7 @@ class Result:
     depth:          int
     cost:           float
     time:           float
+    algorithm:      str = "Unknown"
 
     def found(self) -> bool:
         return self.solution is not None
@@ -36,9 +37,10 @@ class Result:
 
     def __repr__(self) -> str:
         if not self.found():
-            return "SearchResult(sin solución)"
+            return f"SearchResult(sin solución, algoritmo={self.algorithm})"
         return (
             f"SearchResult(\n"
+            f"  algoritmo      : {self.algorithm}\n"
             f"  acciones      : {self.get_actions()}\n"
             f"  nodos expandidos: {self.nodes_expanded}\n"
             f"  profundidad   : {self.depth}\n"

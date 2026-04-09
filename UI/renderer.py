@@ -40,6 +40,7 @@ _MAPS_DIR: str = "maps"
 _ACTIVE_SOLVE_PROCESS: mp.Process | None = None
 _ACTIVE_SOLVE_QUEUE: mp.Queue | None = None
 _ACTIVE_SOLVE_ID: int | None = None
+_ACTIVE_SOLVE_PROGRESS: dict[str, Any] | None = None
 _SOLVE_COUNTER: int = 0
 _ALGORITHMS = {
     "BFS": BFS,
@@ -121,6 +122,7 @@ def _serialize_world(world: World, map_name: str) -> dict[str, Any]:
 def _serialize_result(result) -> dict[str, Any]:
     if result is None:
         return {
+            "algorithm": "Unknown",
             "found": False,
             "nodesExpanded": 0,
             "depth": 0,
@@ -132,6 +134,7 @@ def _serialize_result(result) -> dict[str, Any]:
 
     if not result.found():
         return {
+            "algorithm": result.algorithm,
             "found": False,
             "nodesExpanded": result.nodes_expanded,
             "depth": result.depth,
@@ -155,6 +158,7 @@ def _serialize_result(result) -> dict[str, Any]:
         )
 
     return {
+        "algorithm": result.algorithm,
         "found": True,
         "nodesExpanded": result.nodes_expanded,
         "depth": result.depth,
@@ -190,10 +194,16 @@ def _solve_worker(map_name: str, map_path: str, algorithm_name: str, out_queue: 
         problem = Problem(world)
         algorithm_cls = _ALGORITHMS[algorithm_name]
         solver = algorithm_cls(problem)
-        result = solver.solve()
+
+        def on_progress(payload: dict[str, Any]) -> bool:
+            out_queue.put({"type": "progress", "payload": payload})
+            return True
+
+        result = solver.solve(progress_callback=on_progress, progress_interval=1.0)
 
         out_queue.put(
             {
+                "type": "result",
                 "ok": True,
                 "payload": {
                     "world": _serialize_world_data(world, map_name, map_path),
@@ -203,14 +213,38 @@ def _solve_worker(map_name: str, map_path: str, algorithm_name: str, out_queue: 
             }
         )
     except Exception as exc:  # pragma: no cover - proceso aislado
-        out_queue.put({"ok": False, "error": str(exc)})
+        out_queue.put({"type": "result", "ok": False, "error": str(exc)})
 
 
 def _cleanup_active_solve() -> None:
-    global _ACTIVE_SOLVE_PROCESS, _ACTIVE_SOLVE_QUEUE, _ACTIVE_SOLVE_ID
+    global _ACTIVE_SOLVE_PROCESS, _ACTIVE_SOLVE_QUEUE, _ACTIVE_SOLVE_ID, _ACTIVE_SOLVE_PROGRESS
     _ACTIVE_SOLVE_PROCESS = None
     _ACTIVE_SOLVE_QUEUE = None
     _ACTIVE_SOLVE_ID = None
+    _ACTIVE_SOLVE_PROGRESS = None
+
+
+def _drain_solve_queue() -> dict[str, Any] | None:
+    """Consume mensajes de progreso y devuelve el ultimo resultado final si existe."""
+    global _ACTIVE_SOLVE_PROGRESS
+    if _ACTIVE_SOLVE_QUEUE is None:
+        return None
+
+    final_msg: dict[str, Any] | None = None
+    while True:
+        try:
+            msg = _ACTIVE_SOLVE_QUEUE.get_nowait()
+        except Empty:
+            break
+
+        if msg.get("type") == "progress":
+            _ACTIVE_SOLVE_PROGRESS = msg.get("payload") or {}
+            continue
+
+        if msg.get("type") == "result":
+            final_msg = msg
+
+    return final_msg
 
 
 @eel.expose
@@ -273,7 +307,7 @@ def solve_map(map_name: str, algorithm_name: str) -> dict[str, Any]:
 @eel.expose
 def start_solve(map_name: str, algorithm_name: str) -> dict[str, Any]:
     """Inicia un calculo en segundo plano y retorna un ID para hacer polling."""
-    global _ACTIVE_SOLVE_PROCESS, _ACTIVE_SOLVE_QUEUE, _ACTIVE_SOLVE_ID, _SOLVE_COUNTER
+    global _ACTIVE_SOLVE_PROCESS, _ACTIVE_SOLVE_QUEUE, _ACTIVE_SOLVE_ID, _ACTIVE_SOLVE_PROGRESS, _SOLVE_COUNTER
     try:
         if _ACTIVE_SOLVE_PROCESS and _ACTIVE_SOLVE_PROCESS.is_alive():
             return {
@@ -301,6 +335,12 @@ def start_solve(map_name: str, algorithm_name: str) -> dict[str, Any]:
         _ACTIVE_SOLVE_ID = solve_id
         _ACTIVE_SOLVE_QUEUE = queue_obj
         _ACTIVE_SOLVE_PROCESS = process
+        _ACTIVE_SOLVE_PROGRESS = {
+            "algorithm": algorithm_name,
+            "nodes_expanded": 0,
+            "elapsed_time": 0.0,
+            "frontier_size": 0,
+        }
 
         return {"ok": True, "solveId": solve_id}
     except Exception as exc:  # pragma: no cover - proteccion de capa API
@@ -322,21 +362,30 @@ def get_solve_status(solve_id: int) -> dict[str, Any]:
         if solve_id != _ACTIVE_SOLVE_ID:
             return {"ok": True, "state": "stale"}
 
-        if _ACTIVE_SOLVE_PROCESS and _ACTIVE_SOLVE_PROCESS.is_alive():
-            return {"ok": True, "state": "running"}
+        final_msg = _drain_solve_queue()
 
-        if _ACTIVE_SOLVE_QUEUE is not None:
-            try:
-                payload = _ACTIVE_SOLVE_QUEUE.get_nowait()
-            except Empty:
-                payload = {"ok": False, "error": "El calculo termino sin devolver resultado."}
-
-            if payload.get("ok"):
+        if final_msg is not None:
+            if final_msg.get("ok"):
                 _cleanup_active_solve()
-                return {"ok": True, "state": "done", "payload": payload["payload"]}
+                return {"ok": True, "state": "done", "payload": final_msg["payload"]}
 
             _cleanup_active_solve()
-            return {"ok": True, "state": "error", "error": payload.get("error", "Error desconocido")}
+            return {"ok": True, "state": "error", "error": final_msg.get("error", "Error desconocido")}
+
+        if _ACTIVE_SOLVE_PROCESS and _ACTIVE_SOLVE_PROCESS.is_alive():
+            return {
+                "ok": True,
+                "state": "running",
+                "progress": _ACTIVE_SOLVE_PROGRESS,
+            }
+
+        if _ACTIVE_SOLVE_QUEUE is not None:
+            _cleanup_active_solve()
+            return {
+                "ok": True,
+                "state": "error",
+                "error": "El calculo termino sin devolver resultado final.",
+            }
 
         _cleanup_active_solve()
         return {"ok": True, "state": "error", "error": "No hay cola de resultado activa."}
