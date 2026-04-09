@@ -23,6 +23,7 @@ const TAXI_MODEL_CONFIG = {
 const state = {
   maps: [],
   algorithms: [],
+  algorithmCategories: {},
   world: null,
   result: null,
   taxiUsesModel: false,
@@ -40,6 +41,7 @@ const state = {
     canAnimate: false,
   },
   lastAlgorithmSelection: null,
+  lastAlgorithmCategorySelection: null,
   animation: {
     playing: false,
     pathIndex: 0,
@@ -50,6 +52,7 @@ const state = {
 
 const dom = {
   mapSelect: document.getElementById("mapSelect"),
+  algorithmCategorySelect: document.getElementById("algorithmCategorySelect"),
   algorithmSelect: document.getElementById("algorithmSelect"),
   solveBtn: document.getElementById("solveBtn"),
   playFloatingBtn: document.getElementById("playFloatingBtn"),
@@ -1060,6 +1063,24 @@ function wireUiEvents() {
     resetSolvedContext();
     void loadSelectedMap();
   });
+
+  dom.algorithmCategorySelect.addEventListener("change", () => {
+    if (state.solve.running) {
+      appendLog("No puedes cambiar de categoria mientras hay un calculo en curso.");
+      if (state.lastAlgorithmCategorySelection) {
+        dom.algorithmCategorySelect.value = state.lastAlgorithmCategorySelection;
+      }
+      return;
+    }
+
+    state.lastAlgorithmCategorySelection = dom.algorithmCategorySelect.value;
+    refreshAlgorithmSelectByCategory(state.lastAlgorithmSelection);
+    state.result = null;
+    resetSolvedContext();
+    updateFloatingControls();
+    setMetrics("Mapa listo. Ejecuta 'Calcular Solucion'.");
+  });
+
   dom.algorithmSelect.addEventListener("change", () => {
     if (state.solve.running) {
       appendLog("No puedes cambiar de algoritmo mientras hay un calculo en curso.");
@@ -1068,6 +1089,7 @@ function wireUiEvents() {
       }
       return;
     }
+
     state.lastAlgorithmSelection = dom.algorithmSelect.value;
     state.result = null;
     resetSolvedContext();
@@ -1119,6 +1141,30 @@ function fillSelect(selectEl, values) {
   });
 }
 
+function getCategoryNames() {
+  return Object.keys(state.algorithmCategories || {});
+}
+
+function algorithmsForCategory(categoryName) {
+  const allAlgorithms = state.algorithms || [];
+  if (!categoryName || !state.algorithmCategories || !state.algorithmCategories[categoryName]) {
+    return allAlgorithms;
+  }
+  return state.algorithmCategories[categoryName];
+}
+
+function refreshAlgorithmSelectByCategory(preferredAlgorithm) {
+  const categoryName = dom.algorithmCategorySelect.value;
+  const filteredAlgorithms = algorithmsForCategory(categoryName);
+  const algorithmSync = syncSelectOptions(
+    dom.algorithmSelect,
+    filteredAlgorithms,
+    preferredAlgorithm || state.lastAlgorithmSelection
+  );
+  state.lastAlgorithmSelection = dom.algorithmSelect.value || null;
+  return algorithmSync;
+}
+
 function syncSelectOptions(selectEl, values, preferredValue) {
   const currentValues = Array.from(selectEl.options).map((opt) => opt.value);
   const changedValues = !arraysEqual(currentValues, values);
@@ -1166,9 +1212,20 @@ async function refreshAppState(options = {}) {
 
     state.maps = appState.maps;
     state.algorithms = appState.algorithms;
+    state.algorithmCategories = appState.algorithmCategories || {
+      "No informado": appState.algorithms || [],
+    };
 
     const mapSync = syncSelectOptions(dom.mapSelect, state.maps, worldMapName || oldSelectedMap);
-    syncSelectOptions(dom.algorithmSelect, state.algorithms, dom.algorithmSelect.value);
+    const categories = getCategoryNames();
+    const categorySync = syncSelectOptions(
+      dom.algorithmCategorySelect,
+      categories,
+      state.lastAlgorithmCategorySelection || categories[0]
+    );
+    state.lastAlgorithmCategorySelection = dom.algorithmCategorySelect.value || null;
+
+    const algorithmSync = refreshAlgorithmSelectByCategory(dom.algorithmSelect.value);
 
     if (!state.maps.length) {
       state.currentMapSignature = null;
@@ -1200,6 +1257,13 @@ async function refreshAppState(options = {}) {
       return;
     }
 
+    if ((categorySync.changedSelection || algorithmSync.changedSelection) && !state.animation.playing) {
+      state.result = null;
+      resetSolvedContext();
+      updateFloatingControls();
+      setMetrics("Mapa listo. Ejecuta 'Calcular Solucion'.");
+    }
+
     if (currentMapVisible) {
       state.currentMapSignature = selectedSignature;
     }
@@ -1222,6 +1286,7 @@ async function init() {
     await refreshAppState({ autoReloadCurrent: false });
 
     state.lastAlgorithmSelection = dom.algorithmSelect.value || null;
+    state.lastAlgorithmCategorySelection = dom.algorithmCategorySelect.value || null;
 
     if (state.maps.length > 0) {
       await loadSelectedMap();

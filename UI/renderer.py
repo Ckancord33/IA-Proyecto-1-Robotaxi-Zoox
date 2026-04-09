@@ -50,6 +50,11 @@ _ALGORITHMS = {
     "A* Search": aStarSearch,
 }
 
+_ALGORITHM_CATEGORIES = {
+    "No informado": ["BFS", "DFS", "Cost Search"],
+    "Informado": ["Greedy Search", "A* Search"],
+}
+
 
 def _find_app_browser() -> str | None:
     """Retorna ruta de Edge/Chrome para abrir la UI en modo app."""
@@ -251,10 +256,24 @@ def _drain_solve_queue() -> dict[str, Any] | None:
 def get_app_state() -> dict[str, Any]:
     """Devuelve listas para poblar la UI."""
     _refresh_map_paths()
+    algorithms_sorted = sorted(_ALGORITHMS.keys())
+
+    categorized = {
+        category: [name for name in names if name in _ALGORITHMS]
+        for category, names in _ALGORITHM_CATEGORIES.items()
+    }
+
+    # Si aparece un algoritmo nuevo no clasificado, cae en "No informado".
+    categorized_names = {name for names in categorized.values() for name in names}
+    uncategorized = [name for name in algorithms_sorted if name not in categorized_names]
+    if uncategorized:
+        categorized.setdefault("No informado", []).extend(uncategorized)
+
     return {
         "maps": sorted(_MAP_PATHS.keys()),
         "mapMeta": {name: _map_signature(name) for name in sorted(_MAP_PATHS.keys())},
-        "algorithms": sorted(_ALGORITHMS.keys()),
+        "algorithms": algorithms_sorted,
+        "algorithmCategories": categorized,
     }
 
 
