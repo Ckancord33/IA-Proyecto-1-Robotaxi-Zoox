@@ -1,26 +1,56 @@
 # IA-Proyecto-1-Robotaxi-Zoox
-El proyecto consiste en desarrollar una aplicación que simule un vehículo autónomo (robotaxi) navegando por una ciudad representada como una cuadrícula de 10×10. El vehículo debe recoger a todos los pasajeros dispersos en el mapa y llevarlos a un único destino común, usando algoritmos de búsqueda de Inteligencia Artificial.
 
-## UI 3D de escritorio (Eel + Three.js)
+## 🚀 Cómo correr el proyecto
 
-La interfaz fue migrada de Pygame a una UI 3D construida con Three.js, manteniendo Python como backend con Eel para que la comunicacion siga siendo simple.
+### Requisitos previos
+- Python 3.10+
+- Google Chrome instalado (la interfaz se abre como app de escritorio)
 
-- Backend Python: [UI/renderer.py](UI/renderer.py)
-- Frontend 3D: [UI/web/index.html](UI/web/index.html), [UI/web/app.js](UI/web/app.js), [UI/web/style.css](UI/web/style.css)
-- Punto de entrada: [main_ui.py](main_ui.py)
+### Pasos
 
-### Ejecutar en modo escritorio
+1. Clona el repositorio:
+```bash
+git clone https://github.com/Ckancord33/IA-Proyecto-1-Robotaxi-Zoox.git
+cd IA-Proyecto-1-Robotaxi-Zoox
+```
 
-1. Instala dependencias:
-
+2. Instala las dependencias:
 ```bash
 pip install -r requirements.txt
 ```
 
-2. Ejecuta la interfaz:
-
+3. Ejecuta la aplicación:
 ```bash
 python main_ui.py
 ```
 
-Se abrira en una ventana de aplicacion (`chrome-app`) y no en una pestaña de navegador tradicional.
+> Se abrirá automáticamente una ventana de escritorio (modo `chrome-app`).  
+> **No** se abre en una pestaña del navegador.
+
+---
+
+## ¿Qué es este proyecto?
+
+Simulación de un robotaxi autónomo que navega por una ciudad representada 
+como una cuadrícula de n×m. El vehículo debe recoger a todos los pasajeros 
+dispersos en el mapa y llevarlos a un único destino, usando algoritmos de 
+búsqueda de Inteligencia Artificial (BFS, DFS, Costo Uniforme, Greedy, A*).
+
+## Arquitectura
+
+La aplicación está dividida en dos capas:
+
+- **Lógica (Python):** modelos del mundo, estado, y algoritmos de búsqueda.
+- **Interfaz (Eel + Three.js):** visualización 3D interactiva que corre en 
+  una ventana de escritorio sin tocar la lógica de búsqueda.
+
+### Archivos principales
+
+| Archivo / Carpeta | Rol |
+|---|---|
+| `main_ui.py` | Punto de entrada de la aplicación |
+| `models/` | Representación del mundo, estado y problema |
+| `algorithms/` | Implementación de los algoritmos de búsqueda |
+| `UI/renderer.py` | Backend Python que comunica lógica e interfaz vía Eel |
+| `UI/web/` | Frontend 3D (HTML, JS con Three.js, CSS) |
+| `maps/` | Archivos de texto con los mapas de prueba |
