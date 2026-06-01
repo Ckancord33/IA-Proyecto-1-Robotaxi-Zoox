@@ -8,7 +8,7 @@ Este archivo lanza la interfaz gráfica que permite:
 - Animar el recorrido del robotaxi recogiendo pasajeros
 """
 
-from ui.renderer import launch
+from UI.renderer import launch
 
 if __name__ == "__main__":
     launch("maps")
